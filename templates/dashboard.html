@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ThreatWeaver SOC Dashboard</title>
+
+  <!-- Font Awesome icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+  <!-- Dashboard styles -->
+  <link rel="stylesheet" href="/static/css/dashboard.css" />
+</head>
+<body>
+
+<!-- ========================================================= SIDEBAR -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <i class="fa-solid fa-shield-halved"></i>
+    <span>ThreatWeaver</span>
+  </div>
+  <ul class="sidebar-nav">
+    <li><a href="#section-kpi"      class="nav-link active"><i class="fa-solid fa-gauge-high"></i> Overview</a></li>
+    <li><a href="#section-charts"   class="nav-link"><i class="fa-solid fa-chart-pie"></i> Analytics</a></li>
+    <li><a href="#section-timeline" class="nav-link"><i class="fa-solid fa-timeline"></i> Timeline</a></li>
+    <li><a href="#section-incidents"class="nav-link"><i class="fa-solid fa-triangle-exclamation"></i> Incidents</a></li>
+    <li><a href="#section-sentinel" class="nav-link"><i class="fa-solid fa-robot"></i> SENTINEL AI</a></li>
+  </ul>
+  <div class="sidebar-footer">
+    <span id="last-refresh-label">Last refresh: —</span>
+  </div>
+</nav>
+
+<!-- ========================================================= MAIN -->
+<main class="main-content">
+
+  <!-- HEADER -->
+  <header class="dash-header">
+    <div class="header-left">
+      <h1><span class="pulse-dot"></span> 🛡️ ThreatWeaver SOC Dashboard</h1>
+      <p class="header-sub">SENTINEL Zero Trust Intelligence Engine · Real-time threat correlation</p>
+    </div>
+    <div class="header-right">
+      <div class="verdict-badge" id="verdict-badge">—</div>
+      <button class="btn-refresh" id="btn-refresh" title="Refresh data">
+        <i class="fa-solid fa-rotate"></i> Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- NO DATA BANNER -->
+  <div class="no-data-banner hidden" id="no-data-banner">
+    <i class="fa-solid fa-circle-info"></i>
+    No analysis data available yet. Run <code>train_isolation_forest_v3.py</code> to generate threat data.
+  </div>
+
+  <!-- ================================================= KPI CARDS -->
+  <section id="section-kpi" class="kpi-grid">
+
+    <div class="kpi-card fade-in-up" style="--delay:0.05s">
+      <div class="kpi-icon bg-blue"><i class="fa-solid fa-database"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Total Events</p>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-total-events">—</h2>
+      </div>
+    </div>
+
+    <div class="kpi-card fade-in-up" style="--delay:0.1s">
+      <div class="kpi-icon bg-orange"><i class="fa-solid fa-bug"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Anomalies Detected</p>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-anomalies">—</h2>
+      </div>
+    </div>
+
+    <div class="kpi-card fade-in-up" style="--delay:0.15s">
+      <div class="kpi-icon bg-red"><i class="fa-solid fa-percent"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Anomaly Rate</p>
+        <h2 class="kpi-value counter" data-target="0" data-suffix="%" id="kpi-anomaly-rate">—</h2>
+      </div>
+    </div>
+
+    <div class="kpi-card fade-in-up" style="--delay:0.2s">
+      <div class="kpi-icon bg-yellow"><i class="fa-solid fa-fire-flame-curved"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Avg Threat Score</p>
+        <h2 class="kpi-value counter" data-target="0" data-decimals="2" id="kpi-avg-score">—</h2>
+      </div>
+    </div>
+
+    <div class="kpi-card fade-in-up confidence-card" style="--delay:0.25s">
+      <div class="kpi-icon bg-teal"><i class="fa-solid fa-circle-half-stroke"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Confidence Score</p>
+        <h2 class="kpi-value" id="kpi-confidence">—</h2>
+        <div class="confidence-bar-wrap">
+          <div class="confidence-bar" id="confidence-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi-card fade-in-up" style="--delay:0.3s">
+      <div class="kpi-icon bg-purple"><i class="fa-solid fa-scale-balanced"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">High-Confidence Cases</p>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-high-conf">—</h2>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ================================================= CHARTS -->
+  <section id="section-charts" class="charts-grid">
+
+    <div class="chart-card fade-in-up" style="--delay:0.1s">
+      <h3 class="chart-title"><i class="fa-solid fa-circle-half-stroke"></i> Risk Distribution</h3>
+      <div class="chart-wrap">
+        <canvas id="chart-risk"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card fade-in-up" style="--delay:0.15s">
+      <h3 class="chart-title"><i class="fa-solid fa-crosshairs"></i> MITRE ATT&amp;CK Techniques</h3>
+      <div class="chart-wrap">
+        <canvas id="chart-mitre"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card fade-in-up" style="--delay:0.2s">
+      <h3 class="chart-title"><i class="fa-solid fa-users-slash"></i> Top Risky Users</h3>
+      <div class="chart-wrap">
+        <canvas id="chart-users"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card fade-in-up" style="--delay:0.25s">
+      <h3 class="chart-title"><i class="fa-solid fa-network-wired"></i> Top Source IPs</h3>
+      <div class="chart-wrap">
+        <canvas id="chart-ips"></canvas>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ================================================= TIMELINE -->
+  <section id="section-timeline" class="section-block fade-in-up" style="--delay:0.1s">
+    <h2 class="section-title"><i class="fa-solid fa-timeline"></i> Event Timeline</h2>
+    <div class="chart-card full-width">
+      <div class="chart-wrap chart-wrap-tall">
+        <canvas id="chart-timeline"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================= INCIDENTS TABLE -->
+  <section id="section-incidents" class="section-block fade-in-up" style="--delay:0.1s">
+    <h2 class="section-title"><i class="fa-solid fa-triangle-exclamation"></i> Top Incidents</h2>
+    <div class="table-card">
+      <div class="table-controls">
+        <input type="text" id="table-search" class="table-search" placeholder="🔍 Filter incidents…" />
+        <span class="table-count" id="table-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table id="incidents-table">
+          <thead>
+            <tr>
+              <th data-sort="username">User <i class="fa-solid fa-sort"></i></th>
+              <th data-sort="source_ip">Source IP <i class="fa-solid fa-sort"></i></th>
+              <th data-sort="risk_level">Risk <i class="fa-solid fa-sort"></i></th>
+              <th data-sort="threat_score">Score <i class="fa-solid fa-sort"></i></th>
+              <th>MITRE Techniques</th>
+            </tr>
+          </thead>
+          <tbody id="incidents-tbody">
+            <tr><td colspan="5" class="loading-row"><span class="shimmer-block"></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================= SENTINEL AI -->
+  <section id="section-sentinel" class="section-block fade-in-up" style="--delay:0.1s">
+    <h2 class="section-title"><i class="fa-solid fa-robot"></i> SENTINEL AI Report</h2>
+    <div class="sentinel-card">
+      <div class="sentinel-header">
+        <p class="sentinel-desc">
+          Trigger the SENTINEL AI engine to generate a Tier-3 SOC threat intelligence report
+          powered by Ollama / Qwen2.5.
+        </p>
+        <button class="btn-sentinel" id="btn-sentinel">
+          <i class="fa-solid fa-bolt"></i> Generate SENTINEL Report
+        </button>
+      </div>
+      <div class="sentinel-status hidden" id="sentinel-loading">
+        <div class="spinner"></div>
+        <span>Generating correlated threat intelligence… this may take up to 3 minutes.</span>
+      </div>
+      <div class="sentinel-output hidden" id="sentinel-output"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Dashboard JS -->
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>
