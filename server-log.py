@@ -19,6 +19,26 @@ OUTPUT_FILE = "dc_logs.csv"
 #   - IPv6-mapped: "::ffff:192.168.1.10"
 #   - Network logons: proper IPv4
 
+IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+IPV6_LIKE_RE = re.compile(r"^([0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4}$")
+
+def looks_like_ip(s: str) -> bool:
+    if not s:
+        return False
+    s = str(s).strip()
+    s2 = s[7:] if s.lower().startswith("::ffff:") else s
+    return bool(IPV4_RE.match(s2) or IPV6_LIKE_RE.match(s))
+
+def find_ip_in_strings(strings):
+    # Scan all inserts; take the first IP-like value
+    for item in strings or []:
+        if not item:
+            continue
+        item = str(item).strip()
+        if looks_like_ip(item):
+            return sanitize_ip(item)
+    return "127.0.0.1"
+
 def sanitize_ip(raw_ip):
     """Normalize IP addresses from Windows Security logs."""
     if not raw_ip or not isinstance(raw_ip, str):
@@ -103,8 +123,13 @@ def collect_dc_logs():
                 #   [0] = TargetUserName
                 #   [9] = IpAddress
                 username = safe_get(strings, 0)
-                raw_ip = safe_get(strings, 9, default="")
-                source_ip = sanitize_ip(raw_ip)
+                # First try the common index (often correct on many setups)
+                candidate = safe_get(strings, 9, default="")
+                if looks_like_ip(candidate):
+                    source_ip = sanitize_ip(candidate)
+                else:
+                    # Fallback: search all StringInserts for an IP-like value
+                    source_ip = find_ip_in_strings(strings)
 
             elif event_id == 4688:
                 # 4688: Process creation
@@ -139,3 +164,4 @@ def collect_dc_logs():
 while True:
     collect_dc_logs()
     time.sleep(60)
+
