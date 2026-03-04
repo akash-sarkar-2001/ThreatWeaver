@@ -131,7 +131,9 @@ function renderSummary(data) {
     ['kpi-anomalies',    data.total_anomalies, 0, ''],
     ['kpi-anomaly-rate', data.anomaly_rate,    2, '%'],
     ['kpi-avg-score',    data.avg_threat_score,2, ''],
-    ['kpi-high-conf',    data.high_confidence_cases, 0, ''],
+    ['kpi-high-conf',    data.high_confidence_cases,  0, ''],
+    ['kpi-med-conf',     data.medium_confidence_cases, 0, ''],
+    ['kpi-low-conf',     data.low_confidence_cases,   0, ''],
   ];
 
   for (const [id, val, dec, sfx] of fields) {
@@ -494,11 +496,98 @@ function initRefreshButton() {
 }
 
 // ============================================================
+// Detection Flags chart
+// ============================================================
+const FLAG_LABELS = {
+  brute_force_flag:          'Brute Force',
+  password_spray_flag:       'Password Spraying',
+  account_enumeration_flag:  'Account Enumeration',
+  credential_stuffing_flag:  'Credential Stuffing',
+  success_after_fail_flag:   'Success After Fail',
+  privilege_escalation_flag: 'Privilege Escalation',
+  lateral_movement_flag:     'Lateral Movement',
+  malicious_process_flag:    'Malicious Process',
+  kerberoasting_flag:        'Kerberoasting',
+  after_hours_flag:          'After-Hours Activity',
+  is_weekend:                'Weekend Activity',
+};
+
+const FLAG_COLORS = [
+  '#ff2d2d', '#ff8c00', '#ffd600', '#00ff88', '#00d4ff',
+  '#b388ff', '#00e5cc', '#ef9a9a', '#aed581', '#4dd0e1', '#f48fb1',
+];
+
+function renderFlagsChart(data) {
+  if (!data || data.no_data) return;
+
+  const keys = Object.keys(FLAG_LABELS);
+  const values = keys.map(k => data[k] || 0);
+
+  // Only render if at least one flag is non-zero
+  if (!values.some(v => v > 0)) return;
+
+  destroyChart('flags');
+  const ctx = $('chart-flags').getContext('2d');
+  charts.flags = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: keys.map(k => FLAG_LABELS[k]),
+      datasets: [{
+        label: 'Count',
+        data: values,
+        backgroundColor: keys.map((_, i) => FLAG_COLORS[i % FLAG_COLORS.length] + '33'),
+        borderColor:     keys.map((_, i) => FLAG_COLORS[i % FLAG_COLORS.length]),
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+        y: { grid: { display: false }, ticks: { color: '#e2e8f0', font: { size: 11 } } }
+      },
+      animation: { duration: 900, easing: 'easeOutQuart' }
+    },
+    plugins: [CHART_PLUGIN_NODATA]
+  });
+}
+
+// ============================================================
+// Log Metrics
+// ============================================================
+function buildLogStatCards(prefix, data) {
+  const stats = [
+    { label: 'Total Rows',           value: data[prefix + '_rows']                 ?? '—' },
+    { label: 'Unique Users',         value: data[prefix + '_unique_users']          ?? '—' },
+    { label: 'Unique IPs',           value: data[prefix + '_unique_ips']            ?? '—' },
+    { label: 'Brute Force Suspects', value: data[prefix + '_brute_force_suspects']  ?? '—' },
+  ];
+  return stats.map(s => `
+    <div class="lm-stat">
+      <div class="lm-stat-label">${s.label}</div>
+      <div class="lm-stat-value">${s.value}</div>
+    </div>
+  `).join('');
+}
+
+function renderLogMetrics(data) {
+  if (!data) return;
+  const dcEl     = $('dc-metrics-stats');
+  const clientEl = $('client-metrics-stats');
+  if (dcEl)     dcEl.innerHTML     = buildLogStatCards('dc',     data);
+  if (clientEl) clientEl.innerHTML = buildLogStatCards('client', data);
+}
+
+// ============================================================
 // Main data loader
 // ============================================================
 async function loadAll() {
   try {
-    const [summary, risk, incidents, mitre, timeline, users, ips] = await Promise.all([
+    const [summary, risk, incidents, mitre, timeline, users, ips, flags, logMetrics] = await Promise.all([
       fetchJSON('/api/summary'),
       fetchJSON('/api/risk-distribution'),
       fetchJSON('/api/top-incidents'),
@@ -506,6 +595,8 @@ async function loadAll() {
       fetchJSON('/api/timeline'),
       fetchJSON('/api/user-risk'),
       fetchJSON('/api/ip-analysis'),
+      fetchJSON('/api/detection-flags'),
+      fetchJSON('/api/log-metrics'),
     ]);
 
     renderSummary(summary);
@@ -515,6 +606,8 @@ async function loadAll() {
     renderUsersChart(users);
     renderIPChart(ips);
     renderTable(incidents);
+    renderFlagsChart(flags);
+    renderLogMetrics(logMetrics);
     updateLastRefresh();
   } catch (err) {
     console.error('Dashboard load error:', err);
