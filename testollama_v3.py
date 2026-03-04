@@ -11,7 +11,7 @@ import argparse
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
@@ -31,6 +31,7 @@ MODEL_NAME = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 # HELPERS
 # -------------------------------------------------
 
+
 def _safe_read_csv(path: str) -> Optional[pd.DataFrame]:
     if not path:
         return None
@@ -40,6 +41,7 @@ def _safe_read_csv(path: str) -> Optional[pd.DataFrame]:
         return pd.read_csv(path, low_memory=False)
     except Exception:
         return None
+
 
 def _parse_mixed_timestamp(value: Any) -> Optional[pd.Timestamp]:
     """Parse timestamps that may look like:
@@ -70,10 +72,12 @@ def _parse_mixed_timestamp(value: Any) -> Optional[pd.Timestamp]:
 
     return None
 
+
 def _normalize_ip(ip: Any) -> str:
     if ip is None or (isinstance(ip, float) and pd.isna(ip)):
         return ""
     return str(ip).strip()
+
 
 def _top_counts(series: pd.Series, n: int = 10) -> Dict[str, int]:
     if series is None or series.empty:
@@ -105,7 +109,8 @@ class LogMetrics:
             "top_bruteforce_pairs": self.top_bruteforce_pairs or {},
         }
 
-def analyze_raw_logs(df: pd.DataFrame) -> LogMetrics:
+
+def analyze_raw_logs(df: Optional[pd.DataFrame]) -> LogMetrics:
     if df is None or df.empty:
         return LogMetrics(
             rows=0,
@@ -123,15 +128,17 @@ def analyze_raw_logs(df: pd.DataFrame) -> LogMetrics:
         if col not in df.columns:
             df[col] = None
 
+    df = df.copy()
+
     # parse timestamps for potential future correlation
     df["_ts"] = df["timestamp"].apply(_parse_mixed_timestamp)
 
-    df["_user"] = df["username"].fillna("").astype(str)
+    df["_user"] = df["username"].fillna("{}").astype(str)
     df["_ip"] = df["source_ip"].apply(_normalize_ip)
 
     event_id_counts = _top_counts(df["event_id"].astype(str), n=50)
-    top_processes = _top_counts(df["process_name", n=15])
-    top_commands = _top_counts(df["command_line", n=10])
+    top_processes = _top_counts(df["process_name", n=15)
+    top_commands = _top_counts(df["command_line", n=10)
 
     unique_users = int(df["_user"].nunique())
     unique_ips = int(df["_ip"].nunique())
@@ -158,6 +165,7 @@ def analyze_raw_logs(df: pd.DataFrame) -> LogMetrics:
         top_bruteforce_pairs=top_pairs,
     )
 
+
 def compute_process_exec_near_anomalies(
     analysis_df: pd.DataFrame,
     logs_df: Optional[pd.DataFrame],
@@ -170,6 +178,8 @@ def compute_process_exec_near_anomalies(
     if "timestamp" not in analysis_df.columns:
         return {"window_minutes": window_minutes, "matches": 0, "top_processes": {}}
 
+    logs_df = logs_df.copy()
+
     for col in ["timestamp", "event_id", "process_name"]:
         if col not in logs_df.columns:
             logs_df[col] = None
@@ -177,7 +187,6 @@ def compute_process_exec_near_anomalies(
     # parse
     analysis_df = analysis_df.copy()
     analysis_df["_ts"] = analysis_df["timestamp"].apply(_parse_mixed_timestamp)
-    logs_df = logs_df.copy()
     logs_df["_ts"] = logs_df["timestamp"].apply(_parse_mixed_timestamp)
 
     anomalies = analysis_df
@@ -214,9 +223,11 @@ def compute_process_exec_near_anomalies(
         "top_processes": top_proc,
     }
 
+
 # -------------------------------------------------
 # LOAD & ANALYZE ADVANCED SECURITY ANALYSIS
 # -------------------------------------------------
+
 
 def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs_path: str = "") -> Dict[str, Any]:
     df = pd.read_csv(analysis_csv_path, low_memory=False)
@@ -257,9 +268,10 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
     # CONFIDENCE TIERS
     # -------------------------------------------------
 
-    high_confidence_cases = int(len(df[pd.to_numeric(df["total_threat_score"], errors="coerce") >= 7]))
-    medium_confidence_cases = int(len(df[pd.to_numeric(df["total_threat_score"], errors="coerce").between(4, 6, inclusive="both")]))
-    low_confidence_cases = int(len(df[pd.to_numeric(df["total_threat_score"], errors="coerce") <= 3]))
+    scores = pd.to_numeric(df["total_threat_score"], errors="coerce")
+    high_confidence_cases = int(len(df[scores >= 7]))
+    medium_confidence_cases = int(len(df[scores.between(4, 6, inclusive="both")]))
+    low_confidence_cases = int(len(df[scores <= 3]))
 
     # -------------------------------------------------
     # CORRELATION ANALYSIS
@@ -279,16 +291,14 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
     # -------------------------------------------------
 
     if (
-        high_confidence_cases > 5 and
-        multi_user_flag and
-        multi_ip_flag and
-        multi_technique_flag
+        high_confidence_cases > 5
+        and multi_user_flag
+        and multi_ip_flag
+        and multi_technique_flag
     ):
         machine_verdict = "STRONG_CORRELATED_ATTACK"
-
     elif medium_confidence_cases > 0:
         machine_verdict = "MODERATE_CORRELATION_NO_CONFIRMED_COMPROMISE"
-
     else:
         machine_verdict = "LOW_CONFIDENCE_ACTIVITY"
 
@@ -299,10 +309,10 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
     confidence_score = min(
         100,
         round(
-            (high_confidence_cases * 5) +
-            (medium_confidence_cases * 2) +
-            (unique_mitre * 3) +
-            (unique_high_ips * 2),
+            (high_confidence_cases * 5)
+            + (medium_confidence_cases * 2)
+            + (unique_mitre * 3)
+            + (unique_high_ips * 2),
             2,
         ),
     )
@@ -312,37 +322,30 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
     # -------------------------------------------------
 
     top_incidents = (
-        high_risk
-        .sort_values("total_threat_score", ascending=False)
-        .head(10)[[
-            "username",
-            "source_ip",
-            "final_risk_level",
-            "total_threat_score",
-            "mitre_techniques",
-        ]]
+        high_risk.sort_values("total_threat_score", ascending=False)
+        .head(10)[
+            [
+                "username",
+                "source_ip",
+                "final_risk_level",
+                "total_threat_score",
+                "mitre_techniques",
+            ]
+        ]
         .to_dict(orient="records")
     )
 
     # -------------------------------------------------
-    # NEW: RAW LOG METRICS
+    # RAW LOG METRICS
     # -------------------------------------------------
 
     dc_df = _safe_read_csv(dc_logs_path)
     client_df = _safe_read_csv(client_logs_path)
 
-    dc_metrics = analyze_raw_logs(dc_df) if dc_df is not None else LogMetrics(
-        rows=0, event_id_counts={}, top_processes={}, top_commands={}, unique_users=0, unique_ips=0, brute_force_suspects=0, top_bruteforce_pairs={}
-    )
-    client_metrics = analyze_raw_logs(client_df) if client_df is not None else LogMetrics(
-        rows=0, event_id_counts={}, top_processes={}, top_commands={}, unique_users=0, unique_ips=0, brute_force_suspects=0, top_bruteforce_pairs={}
-    )
+    dc_metrics = analyze_raw_logs(dc_df)
+    client_metrics = analyze_raw_logs(client_df)
 
     proc_corr = compute_process_exec_near_anomalies(df, dc_df if dc_df is not None else client_df, window_minutes=15)
-
-    # -------------------------------------------------
-    # RETURN STRUCTURED SUMMARY
-    # -------------------------------------------------
 
     return {
         "total_events": total_events,
@@ -356,6 +359,9 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
         "unique_high_users": unique_high_users,
         "unique_high_ips": unique_high_ips,
         "unique_mitre_techniques": unique_mitre,
+        "multi_user_flag": multi_user_flag,
+        "multi_ip_flag": multi_ip_flag,
+        "multi_technique_flag": multi_technique_flag,
         "machine_verdict": machine_verdict,
         "confidence_score": confidence_score,
         "top_incidents": top_incidents,
@@ -364,9 +370,11 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
         "process_exec_near_anomalies": proc_corr,
     }
 
+
 # -------------------------------------------------
 # PROMPT BUILDER (MULTI-LAYERED)
 # -------------------------------------------------
+
 
 def build_prompt(summary: Dict[str, Any]) -> str:
     return f"""
@@ -393,6 +401,11 @@ Low Confidence Cases (Score ≤3): {summary['low_confidence_cases']}
 Unique High-Risk Users: {summary['unique_high_users']}
 Unique High-Risk IPs: {summary['unique_high_ips']}
 Unique MITRE Techniques Observed: {summary['unique_mitre_techniques']}
+
+Multi-dimensional spread flags:
+- multi_user_flag: {summary.get('multi_user_flag')}
+- multi_ip_flag: {summary.get('multi_ip_flag')}
+- multi_technique_flag: {summary.get('multi_technique_flag')}
 
 Risk Distribution:
 {summary['risk_distribution']}
@@ -436,6 +449,14 @@ MANDATORY REASONING RULES
    explicitly state that no confirmed breach is observed.
 10. Base conclusions ONLY on provided structured evidence.
 
+Additional strict constraints (to prevent hallucinations):
+- Do NOT call any IP "known compromised" unless the provided evidence explicitly labels it compromised.
+- Do NOT claim "credential stuffing" unless the evidence explicitly says "credential stuffing".
+  If you see brute force, call it "brute force" only.
+- Do NOT infer lateral movement / remote services unless a technique indicating it is present in mitre_techniques.
+- If Machine Correlation Verdict is STRONG_CORRELATED_ATTACK, your narrative MUST acknowledge multi-user, multi-IP,
+  and multi-technique spread (as shown by the flags). If any flag is false, say the verdict might be inconsistent.
+
 ====================================================
 THREAT SCORE INTERPRETATION
 ====================================================
@@ -477,9 +498,11 @@ RESPONSE FORMAT (STRICT)
 Keep output under 1000 words.
 """
 
+
 # -------------------------------------------------
 # CALL OLLAMA
 # -------------------------------------------------
+
 
 def call_llm(prompt: str) -> str:
     response = requests.post(
@@ -498,13 +521,14 @@ def call_llm(prompt: str) -> str:
         },
         timeout=180,
     )
-
     response.raise_for_status()
     return response.json()["response"]
+
 
 # -------------------------------------------------
 # MAIN
 # -------------------------------------------------
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="SENTINEL AI Threat Intelligence Engine")
@@ -512,6 +536,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dc-logs", default=os.getenv("DC_LOGS_CSV", DEFAULT_DC_LOGS_CSV))
     p.add_argument("--client-logs", default=os.getenv("CLIENT_LOGS_CSV", DEFAULT_CLIENT_LOGS_CSV))
     return p.parse_args()
+
 
 def main() -> None:
     args = parse_args()
@@ -536,6 +561,7 @@ def main() -> None:
     print("SENTINEL AI CORRELATED THREAT REPORT")
     print("==================================================\n")
     print(output)
+
 
 if __name__ == "__main__":
     main()
