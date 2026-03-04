@@ -27,6 +27,8 @@
     <li><a href="#section-charts"   class="nav-link"><i class="fa-solid fa-chart-pie"></i> Analytics</a></li>
     <li><a href="#section-timeline" class="nav-link"><i class="fa-solid fa-timeline"></i> Timeline</a></li>
     <li><a href="#section-incidents"class="nav-link"><i class="fa-solid fa-triangle-exclamation"></i> Incidents</a></li>
+    <li><a href="#section-flags"    class="nav-link"><i class="fa-solid fa-flag"></i> Detection Flags</a></li>
+    <li><a href="#section-log-metrics" class="nav-link"><i class="fa-solid fa-server"></i> Log Metrics</a></li>
     <li><a href="#section-sentinel" class="nav-link"><i class="fa-solid fa-robot"></i> SENTINEL AI</a></li>
   </ul>
   <div class="sidebar-footer">
@@ -54,7 +56,7 @@
   <!-- NO DATA BANNER -->
   <div class="no-data-banner hidden" id="no-data-banner">
     <i class="fa-solid fa-circle-info"></i>
-    No analysis data available yet. Run <code>train_isolation_forest_v3.py</code> to generate threat data.
+    No analysis data available yet. Run <code>train_isolation_forest_v4.py</code> to generate threat data.
   </div>
 
   <!-- ================================================= KPI CARDS -->
@@ -111,6 +113,24 @@
       </div>
     </div>
 
+    <!-- Medium Confidence Cases -->
+    <div class="kpi-card fade-in-up" style="--delay:0.35s">
+      <div class="kpi-icon bg-yellow"><i class="fa-solid fa-circle-half-stroke"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Medium-Confidence Cases</p>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-med-conf">—</h2>
+      </div>
+    </div>
+
+    <!-- Low Confidence Cases -->
+    <div class="kpi-card fade-in-up" style="--delay:0.40s">
+      <div class="kpi-icon bg-green"><i class="fa-solid fa-check-circle"></i></div>
+      <div class="kpi-body">
+        <p class="kpi-label">Low-Confidence Cases</p>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-low-conf">—</h2>
+      </div>
+    </div>
+
   </section>
 
   <!-- ================================================= CHARTS -->
@@ -156,6 +176,31 @@
     </div>
   </section>
 
+  <!-- ================================================= DETECTION FLAGS -->
+  <section id="section-flags" class="section-block fade-in-up" style="--delay:0.1s">
+    <h2 class="section-title"><i class="fa-solid fa-flag"></i> Detection Flag Counts</h2>
+    <div class="chart-card full-width">
+      <div class="chart-wrap chart-wrap-tall">
+        <canvas id="chart-flags"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================= LOG METRICS -->
+  <section id="section-log-metrics" class="section-block fade-in-up" style="--delay:0.1s">
+    <h2 class="section-title"><i class="fa-solid fa-server"></i> Raw Log Telemetry</h2>
+    <div class="log-metrics-grid">
+      <div class="log-metric-card" id="dc-metrics-card">
+        <h4><i class="fa-solid fa-building-columns"></i> Domain Controller Logs</h4>
+        <div class="log-metric-stats" id="dc-metrics-stats">—</div>
+      </div>
+      <div class="log-metric-card" id="client-metrics-card">
+        <h4><i class="fa-solid fa-desktop"></i> Client Machine Logs</h4>
+        <div class="log-metric-stats" id="client-metrics-stats">—</div>
+      </div>
+    </div>
+  </section>
+
   <!-- ================================================= INCIDENTS TABLE -->
   <section id="section-incidents" class="section-block fade-in-up" style="--delay:0.1s">
     <h2 class="section-title"><i class="fa-solid fa-triangle-exclamation"></i> Top Incidents</h2>
@@ -189,8 +234,7 @@
     <div class="sentinel-card">
       <div class="sentinel-header">
         <p class="sentinel-desc">
-          Trigger the SENTINEL AI engine to generate a Tier-3 SOC threat intelligence report
-          powered by Ollama / Qwen2.5.
+          Trigger the SENTINEL AI engine (v4) to generate a Tier-3 SOC threat intelligence report with raw log correlation, MITRE ATT&amp;CK mapping, and Zero Trust hardening recommendations. Powered by Ollama / Qwen2.5.
         </p>
         <button class="btn-sentinel" id="btn-sentinel">
           <i class="fa-solid fa-bolt"></i> Generate SENTINEL Report

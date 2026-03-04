@@ -17,6 +17,8 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ANALYSIS_CSV = os.path.join(BASE_DIR, "advanced_security_analysis.csv")
 HIGH_RISK_CSV = os.path.join(BASE_DIR, "high_risk_incidents.csv")
+DC_LOGS_CSV = os.path.join(BASE_DIR, "dc_logs.csv")
+CLIENT_LOGS_CSV = os.path.join(BASE_DIR, "client_logs.csv")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -263,20 +265,101 @@ def api_ip_analysis():
     })
 
 
+@app.route("/api/detection-flags")
+def api_detection_flags():
+    """Return counts for all v4 rule-based detection flags."""
+    df = _load_analysis()
+    if df is None:
+        return jsonify({"no_data": True})
+
+    flag_cols = [
+        "brute_force_flag", "password_spray_flag", "account_enumeration_flag",
+        "credential_stuffing_flag", "success_after_fail_flag", "privilege_escalation_flag",
+        "lateral_movement_flag", "malicious_process_flag", "kerberoasting_flag",
+        "after_hours_flag", "is_weekend",
+    ]
+
+    result = {}
+    for col in flag_cols:
+        if col in df.columns:
+            result[col] = int(df[col].sum())
+        else:
+            result[col] = 0
+    return jsonify(result)
+
+
+@app.route("/api/high-risk-incidents")
+def api_high_risk_incidents():
+    """Return top 20 rows from high_risk_incidents.csv as JSON records."""
+    df = _load_high_risk()
+    if df is None:
+        return jsonify({"no_data": True, "incidents": []})
+
+    key_cols = [
+        "timestamp", "username", "source_ip", "final_risk_level",
+        "total_threat_score", "mitre_techniques", "machine",
+    ]
+    cols = [c for c in key_cols if c in df.columns]
+    top = df[cols].head(20).copy()
+
+    records = []
+    for _, row in top.iterrows():
+        records.append({col: _safe_str(row[col]) for col in cols})
+    return jsonify({"incidents": records})
+
+
+@app.route("/api/log-metrics")
+def api_log_metrics():
+    """Return basic telemetry counts from dc_logs.csv and client_logs.csv."""
+    result = {}
+
+    for prefix, path in [("dc", DC_LOGS_CSV), ("client", CLIENT_LOGS_CSV)]:
+        if not os.path.exists(path):
+            result[f"{prefix}_rows"] = 0
+            result[f"{prefix}_unique_users"] = 0
+            result[f"{prefix}_unique_ips"] = 0
+            result[f"{prefix}_brute_force_suspects"] = 0
+            continue
+        try:
+            df = pd.read_csv(path, low_memory=False)
+        except Exception:
+            result[f"{prefix}_rows"] = 0
+            result[f"{prefix}_unique_users"] = 0
+            result[f"{prefix}_unique_ips"] = 0
+            result[f"{prefix}_brute_force_suspects"] = 0
+            continue
+
+        result[f"{prefix}_rows"] = int(len(df))
+        result[f"{prefix}_unique_users"] = int(df["username"].nunique()) if "username" in df.columns else 0
+        result[f"{prefix}_unique_ips"] = int(df["source_ip"].nunique()) if "source_ip" in df.columns else 0
+
+        if "username" in df.columns:
+            user_fail_counts = df.groupby("username").size()
+            result[f"{prefix}_brute_force_suspects"] = int((user_fail_counts >= 5).sum())
+        else:
+            result[f"{prefix}_brute_force_suspects"] = 0
+
+    return jsonify(result)
+
+
 @app.route("/api/sentinel-report")
 def api_sentinel_report():
     """Trigger the SENTINEL AI engine and return the generated report."""
     try:
-        # Reuse logic from testollama_v3
         sys.path.insert(0, BASE_DIR)
-        from testollama_v3 import load_and_analyze, build_prompt, call_llm  # noqa: PLC0415
+        from testollama_v4 import load_and_analyze, generate_report, sanitize_output  # noqa: PLC0415
 
         if not os.path.exists(ANALYSIS_CSV):
             return jsonify({"error": "No analysis data available. Run the ML pipeline first."}), 404
 
-        summary = load_and_analyze(ANALYSIS_CSV)
-        prompt = build_prompt(summary)
-        report = call_llm(prompt)
+        summary = load_and_analyze(ANALYSIS_CSV, dc_logs_path=DC_LOGS_CSV, client_logs_path=CLIENT_LOGS_CSV)
+        raw_output, rejection_reasons = generate_report(summary)
+        allowed = summary.get("allowed_mitre_techniques", []) or []
+        # rejection_reasons is None when validation passed; sanitize only when it failed
+        if rejection_reasons:
+            report = sanitize_output(raw_output, allowed)
+        else:
+            report = raw_output
         return jsonify({"report": report})
 
     except ImportError as exc:

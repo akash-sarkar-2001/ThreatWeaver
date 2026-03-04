@@ -297,6 +297,7 @@ body {
 .bg-yellow { background: rgba(255,214,0,0.15);  color: var(--yellow); }
 .bg-teal   { background: rgba(0,229,204,0.15);  color: var(--teal);   }
 .bg-purple { background: rgba(179,136,255,0.15);color: var(--purple); }
+.bg-green  { background: rgba(0,255,136,0.15);  color: var(--green);  }
 
 .kpi-label {
   font-size: 0.72rem;
@@ -651,6 +652,69 @@ body {
 
 /* Hidden helper */
 .hidden { display: none !important; }
+
+/* ============================================================
+   LOG METRICS
+   ============================================================ */
+.log-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+.log-metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+  transition: transform 0.25s, box-shadow 0.25s;
+}
+
+.log-metric-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 36px rgba(0,212,255,0.12);
+}
+
+.log-metric-card h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-metric-card h4 i { color: var(--cyan); }
+
+.log-metric-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.lm-stat {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.lm-stat-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.lm-stat-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
 
 /* ============================================================
    RESPONSIVE
