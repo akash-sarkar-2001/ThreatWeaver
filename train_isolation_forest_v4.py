@@ -9,20 +9,29 @@ from sklearn.ensemble import IsolationForest
 # CONFIGURATION CONSTANTS
 # =====================================================
 
-# Contamination: expected ~3% anomaly rate in enterprise security logs
 CONTAMINATION_RATE = 0.03
 
 BRUTE_FORCE_LIFETIME_THRESHOLD = 10   # total failures per user lifetime
 BRUTE_FORCE_WINDOW_THRESHOLD = 5      # failures within a 10-minute window
 MIN_UNIQUE_IPS_FOR_BRUTE_FORCE = 1    # must have >1 source IP to flag brute force
-LATERAL_MOVEMENT_MACHINE_THRESHOLD = 3  # unique machines accessed
-CREDENTIAL_STUFFING_FAILURE_THRESHOLD = 5  # prior failures before a success
-PRIVILEGE_ESC_FAILURE_THRESHOLD = 0   # must have had at least 1 prior failure (> 0)
-AFTER_HOURS_START = 20                # hour >= this value is after-hours
-AFTER_HOURS_END = 6                   # hour < this value is after-hours
 
-# Placeholder for IPs without a recognisable subnet
+# v3/v4 originally used 3; in a 2-machine lab this often never triggers.
+LATERAL_MOVEMENT_MACHINE_THRESHOLD = 1  # flag if user touches >= 2 machines total
+
+CREDENTIAL_STUFFING_FAILURE_THRESHOLD = 5
+PRIVILEGE_ESC_FAILURE_THRESHOLD = 0
+
+AFTER_HOURS_START = 20
+AFTER_HOURS_END = 6
+
 UNKNOWN_SUBNET = "N/A"
+
+# IP-based detections
+PASSWORD_SPRAY_IP_UNIQUE_USERS_THRESHOLD = 6
+ACCOUNT_ENUM_IP_UNIQUE_USERS_THRESHOLD = 12
+
+# Kerberoast indicator
+KERBEROAST_TGS_PER_USER_THRESHOLD = 6
 
 # =====================================================
 # STEP 1 — LOAD DATA (with validation)
@@ -69,6 +78,11 @@ df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
 df["login_hour"] = df["timestamp"].dt.hour.fillna(0).astype(int)
 df["day"] = df["timestamp"].dt.day.fillna(0).astype(int)
 
+# Normalize types
+df["source_ip"] = df["source_ip"].fillna("N/A").astype(str)
+df["process_name"] = df["process_name"].fillna("N/A").astype(str)
+df["command_line"] = df["command_line"].fillna("").astype(str)
+
 print(f"[+] Loaded {len(df)} total events ({len(dc)} DC + {len(client)} client)")
 
 # =====================================================
@@ -82,6 +96,9 @@ df["is_successful_login"] = (df["event_id"] == 4624).astype(int)
 df["is_privileged"] = (df["event_id"] == 4672).astype(int)
 df["is_process_exec"] = (df["event_id"] == 4688).astype(int)
 
+df["is_kerberos_tgt"] = (df["event_id"] == 4768).astype(int)
+df["is_kerberos_tgs"] = (df["event_id"] == 4769).astype(int)
+
 SUSPICIOUS_PROCESS_PATTERN = (
     r"powershell|cmd|wmic|psexec|mimikatz|procdump|ntdsutil|secretsdump|"
     r"bloodhound|sharphound|rubeus|certutil|bitsadmin|mshta|regsvr32|"
@@ -94,10 +111,23 @@ df["suspicious_process"] = df["process_name"].str.contains(
     na=False
 ).astype(int)
 
-# After-hours and weekend flags
+# command-line based suspicion (helps when process_name is generic)
+SUSPICIOUS_CMDLINE_PATTERN = (
+    r"mimikatz|sekurlsa|lsadump|dcsync|rubeus|kerberoast|asreproast|"
+    r"ntdsutil|vssadmin|wmic\s+process|psexec|procdump|comsvcs\.dll|"
+    r"reg\s+save|lsass|sam|system|security"
+)
+
+df["suspicious_commandline"] = df["command_line"].str.contains(
+    SUSPICIOUS_CMDLINE_PATTERN,
+    case=False,
+    na=False
+).astype(int)
+
 df["after_hours_flag"] = (
     (df["login_hour"] < AFTER_HOURS_END) | (df["login_hour"] >= AFTER_HOURS_START)
 ).astype(int)
+
 df["is_weekend"] = df["timestamp"].dt.dayofweek.isin([5, 6]).astype(int)
 
 print(f"[+] Failed logins: {df['is_failed_login'].sum()}")
@@ -105,6 +135,9 @@ print(f"[+] Successful logins: {df['is_successful_login'].sum()}")
 print(f"[+] Privileged events: {df['is_privileged'].sum()}")
 print(f"[+] Process executions: {df['is_process_exec'].sum()}")
 print(f"[+] Suspicious processes: {df['suspicious_process'].sum()}")
+print(f"[+] Suspicious command lines: {df['suspicious_commandline'].sum()}")
+print(f"[+] Kerberos TGT (4768): {df['is_kerberos_tgt'].sum()}")
+print(f"[+] Kerberos TGS (4769): {df['is_kerberos_tgs'].sum()}")
 print(f"[+] After-hours events: {df['after_hours_flag'].sum()}")
 print(f"[+] Weekend events: {df['is_weekend'].sum()}")
 
@@ -116,6 +149,8 @@ print("[*] STEP 3 — Computing behavioral aggregations...")
 
 df["user_event_count"] = df.groupby("username")["event_id"].transform("count")
 df["user_failed_count"] = df.groupby("username")["is_failed_login"].transform("sum")
+df["user_success_count"] = df.groupby("username")["is_successful_login"].transform("sum")
+
 df["user_unique_machines"] = df.groupby("username")["machine"].transform("nunique")
 df["user_unique_ips"] = df.groupby("username")["source_ip"].transform("nunique")
 df["ip_event_count"] = df.groupby("source_ip")["event_id"].transform("count")
@@ -124,7 +159,6 @@ user_avg_hour = df.groupby("username")["login_hour"].transform("mean")
 df["hour_deviation"] = abs(df["login_hour"] - user_avg_hour)
 
 # Rolling 10-minute brute force window per user
-# Sort only by username so each group is kept together; timestamp sort happens inside _rolling_10min
 _sorted = df.sort_values("username").copy()
 _sorted["_orig_idx"] = _sorted.index
 
@@ -147,12 +181,24 @@ df["failed_last_10min"] = failed_10min.reindex(df.index).fillna(0).astype(int)
 # IP subnet extraction (first 3 octets); non-IP addresses get UNKNOWN_SUBNET
 df["ip_subnet"] = df["source_ip"].str.extract(r"^(\d+\.\d+\.\d+)\.", expand=False).fillna(UNKNOWN_SUBNET)
 
+# NEW: IP-based unique failed users (spraying/enumeration)
+_failed = df[df["is_failed_login"] == 1]
+ip_unique_failed_users = _failed.groupby("source_ip")["username"].nunique()
+df["ip_unique_failed_users"] = df["source_ip"].map(ip_unique_failed_users).fillna(0).astype(int)
+
+# NEW: Kerberoast indicator (TGS requests per user)
+_tgs = df[df["is_kerberos_tgs"] == 1]
+user_tgs_count = _tgs.groupby("username")["event_id"].count()
+df["user_tgs_count"] = df["username"].map(user_tgs_count).fillna(0).astype(int)
+
 numeric_cols = df.select_dtypes(include=[np.number]).columns
 df[numeric_cols] = df[numeric_cols].fillna(0)
 
 print(f"[+] Unique users: {df['username'].nunique()}")
 print(f"[+] Max user failed count: {df['user_failed_count'].max()}")
 print(f"[+] Max failed_last_10min: {df['failed_last_10min'].max()}")
+print(f"[+] Max ip_unique_failed_users: {df['ip_unique_failed_users'].max()}")
+print(f"[+] Max user_tgs_count: {df['user_tgs_count'].max()}")
 
 # =====================================================
 # STEP 4 — ENCODING
@@ -178,6 +224,9 @@ features = df[[
     "is_privileged",
     "is_process_exec",
     "suspicious_process",
+    "suspicious_commandline",
+    "is_kerberos_tgt",
+    "is_kerberos_tgs",
     "ip_subnet_enc",
     "user_event_count",
     "user_failed_count",
@@ -187,14 +236,14 @@ features = df[[
     "hour_deviation",
     "failed_last_10min",
     "after_hours_flag",
-    "is_weekend"
+    "is_weekend",
+    "ip_unique_failed_users",
+    "user_tgs_count"
 ]]
-
-contamination_rate = CONTAMINATION_RATE
 
 iso = IsolationForest(
     n_estimators=300,
-    contamination=contamination_rate,
+    contamination=CONTAMINATION_RATE,
     random_state=42,
     n_jobs=-1
 )
@@ -202,8 +251,7 @@ iso = IsolationForest(
 iso.fit(features)
 
 df["anomaly_score_raw"] = iso.decision_function(features)
-df["is_anomaly"] = iso.predict(features)
-df["is_anomaly"] = (df["is_anomaly"] == -1).astype(int)
+df["is_anomaly"] = (iso.predict(features) == -1).astype(int)
 
 print(f"[+] Isolation Forest complete. Anomalies detected: {df['is_anomaly'].sum()} ({df['is_anomaly'].mean()*100:.1f}%)")
 
@@ -213,7 +261,7 @@ print(f"[+] Isolation Forest complete. Anomalies detected: {df['is_anomaly'].sum
 
 print("[*] STEP 6 — Applying advanced rule-based detection layers...")
 
-# 1️⃣ Brute Force Detection — time-windowed burst OR lifetime threshold
+# 1️⃣ Brute Force — burst OR lifetime threshold
 df["brute_force_flag"] = (
     (
         (df["user_failed_count"] > BRUTE_FORCE_LIFETIME_THRESHOLD) |
@@ -222,27 +270,53 @@ df["brute_force_flag"] = (
     (df["user_unique_ips"] > MIN_UNIQUE_IPS_FOR_BRUTE_FORCE)
 ).astype(int)
 
-# 2️⃣ Privilege Escalation Pattern — only when failures preceded the success
+# 2️⃣ Privilege escalation pattern (privileged success after at least some failures)
 df["privilege_escalation_flag"] = (
     (df["is_successful_login"] == 1) &
     (df["is_privileged"] == 1) &
     (df["user_failed_count"] > PRIVILEGE_ESC_FAILURE_THRESHOLD)
 ).astype(int)
 
-# 3️⃣ Lateral Movement
+# 3️⃣ Lateral movement (lab-friendly)
 df["lateral_movement_flag"] = (
     df["user_unique_machines"] > LATERAL_MOVEMENT_MACHINE_THRESHOLD
 ).astype(int)
 
-# 4️⃣ Process-Based Attack
+# 4️⃣ Process-based attack (process OR cmdline)
 df["malicious_process_flag"] = (
-    df["suspicious_process"] == 1
+    (df["suspicious_process"] == 1) |
+    (df["suspicious_commandline"] == 1)
 ).astype(int)
 
-# 5️⃣ Credential Stuffing — successful login after >N prior failures
+# 5️⃣ Credential stuffing (successful login after many failures)
 df["credential_stuffing_flag"] = (
     (df["is_successful_login"] == 1) &
     (df["user_failed_count"] > CREDENTIAL_STUFFING_FAILURE_THRESHOLD)
+).astype(int)
+
+# 6️⃣ Password spraying (per-IP)
+df["password_spray_flag"] = (
+    (df["ip_unique_failed_users"] >= PASSWORD_SPRAY_IP_UNIQUE_USERS_THRESHOLD) &
+    (df["is_failed_login"] == 1)
+).astype(int)
+
+# 7️⃣ Account enumeration (stronger per-IP)
+df["account_enumeration_flag"] = (
+    (df["ip_unique_failed_users"] >= ACCOUNT_ENUM_IP_UNIQUE_USERS_THRESHOLD) &
+    (df["is_failed_login"] == 1)
+).astype(int)
+
+# 8️⃣ Success after fail (non-privileged correlation)
+df["success_after_fail_flag"] = (
+    (df["user_failed_count"] >= 5) &
+    (df["user_success_count"] >= 1) &
+    (df["is_successful_login"] == 1)
+).astype(int)
+
+# 9️⃣ Kerberoasting indicator
+df["kerberoasting_flag"] = (
+    (df["user_tgs_count"] >= KERBEROAST_TGS_PER_USER_THRESHOLD) &
+    (df["is_kerberos_tgs"] == 1)
 ).astype(int)
 
 print(f"[+] Brute force flags: {df['brute_force_flag'].sum()}")
@@ -250,6 +324,10 @@ print(f"[+] Privilege escalation flags: {df['privilege_escalation_flag'].sum()}"
 print(f"[+] Lateral movement flags: {df['lateral_movement_flag'].sum()}")
 print(f"[+] Malicious process flags: {df['malicious_process_flag'].sum()}")
 print(f"[+] Credential stuffing flags: {df['credential_stuffing_flag'].sum()}")
+print(f"[+] Password spray flags: {df['password_spray_flag'].sum()}")
+print(f"[+] Account enumeration flags: {df['account_enumeration_flag'].sum()}")
+print(f"[+] Success-after-fail flags: {df['success_after_fail_flag'].sum()}")
+print(f"[+] Kerberoasting flags: {df['kerberoasting_flag'].sum()}")
 print(f"[+] After-hours flags: {df['after_hours_flag'].sum()}")
 
 # =====================================================
@@ -258,19 +336,25 @@ print(f"[+] After-hours flags: {df['after_hours_flag'].sum()}")
 
 print("[*] STEP 7 — Mapping MITRE ATT&CK techniques (vectorized)...")
 
-_brute       = np.where(df["brute_force_flag"] == 1,         "T1110 - Brute Force", "")
-_priv_esc    = np.where(df["privilege_escalation_flag"] == 1, "T1078 - Valid Accounts", "")
-_lateral     = np.where(df["lateral_movement_flag"] == 1,     "T1021 - Remote Services", "")
-_malicious   = np.where(df["malicious_process_flag"] == 1,    "T1059 - Command & Scripting Interpreter", "")
-_cred_stuff  = np.where(df["credential_stuffing_flag"] == 1,  "T1110.001 - Password Guessing", "")
-_after_priv  = np.where(
+_brute        = np.where(df["brute_force_flag"] == 1, "T1110 - Brute Force", "")
+_spray        = np.where(df["password_spray_flag"] == 1, "T1110.003 - Brute Force: Password Spraying", "")
+_enum         = np.where(df["account_enumeration_flag"] == 1, "T1087.002 - Account Discovery: Domain Account", "")
+_priv_esc     = np.where(df["privilege_escalation_flag"] == 1, "T1078 - Valid Accounts", "")
+_success_af   = np.where(df["success_after_fail_flag"] == 1, "T1078 - Valid Accounts", "")
+_lateral      = np.where(df["lateral_movement_flag"] == 1, "T1021 - Remote Services", "")
+_malicious    = np.where(df["malicious_process_flag"] == 1, "T1059 - Command & Scripting Interpreter", "")
+_cred_stuff   = np.where(df["credential_stuffing_flag"] == 1, "T1110.004 - Brute Force: Credential Stuffing", "")
+_kerberoast   = np.where(df["kerberoasting_flag"] == 1, "T1558.003 - Steal or Forge Kerberos Tickets: Kerberoasting", "")
+
+_after_priv = np.where(
     (df["after_hours_flag"] == 1) & (df["is_privileged"] == 1),
-    "T1078.002 - Domain Accounts", ""
+    "T1078.002 - Domain Accounts",
+    ""
 )
 
 df["mitre_techniques"] = [
     ", ".join(v for v in row if v)
-    for row in zip(_brute, _priv_esc, _lateral, _malicious, _cred_stuff, _after_priv)
+    for row in zip(_brute, _spray, _enum, _priv_esc, _success_af, _lateral, _malicious, _cred_stuff, _kerberoast, _after_priv)
 ]
 
 events_with_techniques = (df["mitre_techniques"] != "").sum()
@@ -284,22 +368,25 @@ print("[*] STEP 8 — Computing confidence and risk scores...")
 
 df["rule_score"] = (
     df["brute_force_flag"] * 3 +
-    df["privilege_escalation_flag"] * 1 +
+    df["password_spray_flag"] * 2 +
+    df["account_enumeration_flag"] * 1 +
+    df["credential_stuffing_flag"] * 3 +
+    df["success_after_fail_flag"] * 2 +
+    df["privilege_escalation_flag"] * 2 +
     df["lateral_movement_flag"] * 3 +
     df["malicious_process_flag"] * 2 +
-    df["credential_stuffing_flag"] * 3 +
+    df["kerberoasting_flag"] * 3 +
     df["after_hours_flag"] * 1
 )
 
 df["ml_score"] = np.where(df["is_anomaly"] == 1, 3, 0)
-
 df["total_threat_score"] = df["rule_score"] + df["ml_score"]
 
 df["final_risk_level"] = np.select(
     [
-        df["total_threat_score"] >= 7,
-        df["total_threat_score"] >= 4,
-        df["total_threat_score"] >= 2,
+        df["total_threat_score"] >= 9,
+        df["total_threat_score"] >= 6,
+        df["total_threat_score"] >= 3,
     ],
     ["CRITICAL", "HIGH", "MEDIUM"],
     default="LOW"
@@ -325,22 +412,26 @@ print(f"[+] Exported {len(high_risk_df)} high-risk incidents to high_risk_incide
 # FINAL SUMMARY
 # =====================================================
 
-print("\n" + "=" * 55)
-print("   ADVANCED SECURITY ENGINE v4 — DETECTION SUMMARY")
-print("=" * 55)
+print("\n" + "=" * 60)
+print("   ADVANCED SECURITY ENGINE v4 — DETECTION SUMMARY (UPDATED)")
+print("=" * 60)
 print(f"  Total Events Analyzed    : {len(df)}")
 print(f"  ML Anomalies Detected    : {df['is_anomaly'].sum()}")
 print(f"  Brute Force Incidents    : {df['brute_force_flag'].sum()}")
+print(f"  Password Spraying        : {df['password_spray_flag'].sum()}")
+print(f"  Account Enumeration      : {df['account_enumeration_flag'].sum()}")
 print(f"  Credential Stuffing      : {df['credential_stuffing_flag'].sum()}")
+print(f"  Success After Fail       : {df['success_after_fail_flag'].sum()}")
 print(f"  Privilege Escalation     : {df['privilege_escalation_flag'].sum()}")
 print(f"  Lateral Movement         : {df['lateral_movement_flag'].sum()}")
 print(f"  Malicious Processes      : {df['malicious_process_flag'].sum()}")
+print(f"  Kerberoasting            : {df['kerberoasting_flag'].sum()}")
 print(f"  After-Hours Activity     : {df['after_hours_flag'].sum()}")
 print(f"  Weekend Activity         : {df['is_weekend'].sum()}")
-print("-" * 55)
+print("-" * 60)
 print(f"  CRITICAL Risk Events     : {(df['final_risk_level'] == 'CRITICAL').sum()}")
 print(f"  HIGH Risk Events         : {(df['final_risk_level'] == 'HIGH').sum()}")
 print(f"  MEDIUM Risk Events       : {(df['final_risk_level'] == 'MEDIUM').sum()}")
 print(f"  LOW Risk Events          : {(df['final_risk_level'] == 'LOW').sum()}")
-print("=" * 55)
+print("=" * 60)
 print("[+] ADVANCED SECURITY ENGINE v4 COMPLETE")
