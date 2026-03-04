@@ -5,7 +5,10 @@ import re
 from datetime import datetime
 
 LOG_TYPE = "Security"
-TARGET_EVENTS = [4624, 4625, 4672, 4768, 4769]  # Authentication events
+
+# Added 4688 so DC-side process execution is collected too
+TARGET_EVENTS = [4624, 4625, 4672, 4768, 4769, 4688]
+
 OUTPUT_FILE = "dc_logs.csv"
 
 # =====================================================
@@ -46,7 +49,7 @@ def sanitize_ip(raw_ip):
 def safe_get(strings, index, default="N/A"):
     """Safely extract a value from StringInserts with validation."""
     if len(strings) > index and strings[index]:
-        val = strings[index].strip()
+        val = str(strings[index]).strip()
         return val if val and val != "-" else default
     return default
 
@@ -72,17 +75,16 @@ def collect_dc_logs():
 
             username = "N/A"
             source_ip = "N/A"
+            process_name = "N/A"
+            command_line = "N/A"
 
             if event_id in [4624, 4625]:
                 # 4624/4625: Logon Success/Failure
-                # StringInserts layout:
                 #   [5]  = TargetUserName
                 #   [8]  = LogonType (2=Interactive, 3=Network, 10=RemoteInteractive)
                 #   [18] = IpAddress (Network Source Address)
-                #   [19] = IpPort
                 username = safe_get(strings, 5)
 
-                # Try index 18 first (standard), fallback to scanning
                 raw_ip = safe_get(strings, 18, default="")
                 source_ip = sanitize_ip(raw_ip)
 
@@ -92,30 +94,39 @@ def collect_dc_logs():
                     source_ip = "127.0.0.1"
 
             elif event_id == 4672:
-                # 4672: Special Privileges Assigned
-                # This event has NO source IP by design
-                # Use 127.0.0.1 since it's always a local privilege assignment
+                # 4672: Special Privileges Assigned (no source IP by design)
                 username = safe_get(strings, 1)
                 source_ip = "127.0.0.1"
 
             elif event_id in [4768, 4769]:
-                # 4768: Kerberos TGT Request
-                # 4769: Kerberos Service Ticket Request
-                # StringInserts layout:
+                # 4768/4769 Kerberos:
                 #   [0] = TargetUserName
-                #   [9] = IpAddress (often ::ffff:x.x.x.x format)
+                #   [9] = IpAddress
                 username = safe_get(strings, 0)
                 raw_ip = safe_get(strings, 9, default="")
                 source_ip = sanitize_ip(raw_ip)
 
-            events.append([time_generated, event_id, username, source_ip])
+            elif event_id == 4688:
+                # 4688: Process creation
+                # Common layout (matches your client-log.py approach):
+                #   [1] = SubjectUserName
+                #   [5] = NewProcessName
+                #   [8] = CommandLine (if enabled in policy)
+                username = safe_get(strings, 1)
+                process_name = safe_get(strings, 5)
+                command_line = safe_get(strings, 8, default="")
+
+                # Most 4688 events will be local
+                source_ip = "127.0.0.1"
+
+            events.append([time_generated, event_id, username, source_ip, process_name, command_line])
 
     win32evtlog.CloseEventLog(hand)
 
     # Write CSV
     with open(OUTPUT_FILE, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp", "event_id", "username", "source_ip"])
+        writer.writerow(["timestamp", "event_id", "username", "source_ip", "process_name", "command_line"])
         writer.writerows(events)
 
     print(f"[DC] Log snapshot saved at {datetime.now()} | Events: {len(events)}")
