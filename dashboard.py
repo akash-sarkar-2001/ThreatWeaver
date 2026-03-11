@@ -269,7 +269,7 @@ def api_sentinel_report():
     try:
         # Reuse logic from testollama_v3
         sys.path.insert(0, BASE_DIR)
-        from testollama_v3 import load_and_analyze, build_prompt, call_llm  # noqa: PLC0415
+        from testollama_v4 import load_and_analyze, build_prompt, call_llm  # noqa: PLC0415
 
         if not os.path.exists(ANALYSIS_CSV):
             return jsonify({"error": "No analysis data available. Run the ML pipeline first."}), 404
