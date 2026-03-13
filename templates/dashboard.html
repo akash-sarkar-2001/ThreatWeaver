@@ -3,9 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ThreatWeaver SOC Dashboard</title>
+  <meta name="description" content="ThreatWeaver SOC Dashboard — SENTINEL Zero Trust Intelligence Engine with real-time threat correlation." />
+  <title>ThreatWeaver · SOC Dashboard</title>
 
-  <!-- Font Awesome icons -->
+  <!-- Google Fonts: Inter + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+  <!-- Font Awesome 6 -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 
   <!-- Chart.js -->
@@ -16,163 +22,265 @@
 </head>
 <body>
 
-<!-- ========================================================= SIDEBAR -->
-<nav class="sidebar" id="sidebar">
+<!-- Animated background canvas -->
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+<!-- ================================================================ SIDEBAR -->
+<nav class="sidebar" id="sidebar" aria-label="Main navigation">
   <div class="sidebar-logo">
-    <i class="fa-solid fa-shield-halved"></i>
-    <span>ThreatWeaver</span>
+    <div class="logo-icon-wrap">
+      <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+    </div>
+    <span class="logo-text">ThreatWeaver</span>
   </div>
-  <ul class="sidebar-nav">
-    <li><a href="#section-kpi"      class="nav-link active"><i class="fa-solid fa-gauge-high"></i> Overview</a></li>
-    <li><a href="#section-charts"   class="nav-link"><i class="fa-solid fa-chart-pie"></i> Analytics</a></li>
-    <li><a href="#section-timeline" class="nav-link"><i class="fa-solid fa-timeline"></i> Timeline</a></li>
-    <li><a href="#section-incidents"class="nav-link"><i class="fa-solid fa-triangle-exclamation"></i> Incidents</a></li>
-    <li><a href="#section-sentinel" class="nav-link"><i class="fa-solid fa-robot"></i> SENTINEL AI</a></li>
+
+  <ul class="sidebar-nav" role="list">
+    <li role="listitem">
+      <a href="#section-kpi" class="nav-link active" id="nav-overview" aria-current="page">
+        <span class="nav-icon"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span>
+        <span class="nav-label">Overview</span>
+        <span class="nav-indicator"></span>
+      </a>
+    </li>
+    <li role="listitem">
+      <a href="#section-charts" class="nav-link" id="nav-analytics">
+        <span class="nav-icon"><i class="fa-solid fa-chart-pie" aria-hidden="true"></i></span>
+        <span class="nav-label">Analytics</span>
+        <span class="nav-indicator"></span>
+      </a>
+    </li>
+    <li role="listitem">
+      <a href="#section-timeline" class="nav-link" id="nav-timeline">
+        <span class="nav-icon"><i class="fa-solid fa-timeline" aria-hidden="true"></i></span>
+        <span class="nav-label">Timeline</span>
+        <span class="nav-indicator"></span>
+      </a>
+    </li>
+    <li role="listitem">
+      <a href="#section-incidents" class="nav-link" id="nav-incidents">
+        <span class="nav-icon"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i></span>
+        <span class="nav-label">Incidents</span>
+        <span class="nav-indicator"></span>
+      </a>
+    </li>
+    <li role="listitem">
+      <a href="#section-sentinel" class="nav-link" id="nav-sentinel">
+        <span class="nav-icon"><i class="fa-solid fa-robot" aria-hidden="true"></i></span>
+        <span class="nav-label">SENTINEL AI</span>
+        <span class="nav-indicator"></span>
+      </a>
+    </li>
   </ul>
+
   <div class="sidebar-footer">
-    <span id="last-refresh-label">Last refresh: —</span>
+    <div class="status-dot-wrap">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span class="status-label">LIVE</span>
+    </div>
+    <span id="last-refresh-label" class="refresh-ts">Last refresh: —</span>
   </div>
 </nav>
 
-<!-- ========================================================= MAIN -->
-<main class="main-content">
+<!-- ================================================================ MAIN -->
+<main class="main-content" role="main">
 
   <!-- HEADER -->
-  <header class="dash-header">
+  <header class="dash-header" role="banner">
     <div class="header-left">
-      <h1><span class="pulse-dot"></span> 🛡️ ThreatWeaver SOC Dashboard</h1>
-      <p class="header-sub">SENTINEL Zero Trust Intelligence Engine · Real-time threat correlation</p>
+      <div class="header-brand">
+        <span class="pulse-dot" aria-label="Live" title="Live feed active"></span>
+        <h1>ThreatWeaver <span class="header-brand-soc">SOC Dashboard</span></h1>
+      </div>
+      <p class="header-sub">
+        <i class="fa-solid fa-microchip" aria-hidden="true"></i>
+        SENTINEL Zero Trust Intelligence Engine &nbsp;·&nbsp; Real-time threat correlation
+      </p>
     </div>
     <div class="header-right">
-      <div class="verdict-badge" id="verdict-badge">—</div>
-      <button class="btn-refresh" id="btn-refresh" title="Refresh data">
-        <i class="fa-solid fa-rotate"></i> Refresh
+      <div class="verdict-badge" id="verdict-badge" role="status" aria-live="polite">—</div>
+      <button class="btn-refresh" id="btn-refresh" title="Refresh data" aria-label="Refresh dashboard data">
+        <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+        <span>Refresh</span>
       </button>
     </div>
   </header>
 
   <!-- NO DATA BANNER -->
-  <div class="no-data-banner hidden" id="no-data-banner">
-    <i class="fa-solid fa-circle-info"></i>
+  <div class="no-data-banner hidden" id="no-data-banner" role="alert">
+    <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
     No analysis data available yet. Run <code>train_isolation_forest_v3.py</code> to generate threat data.
   </div>
 
-  <!-- ================================================= KPI CARDS -->
-  <section id="section-kpi" class="kpi-grid">
+  <!-- ================================================== KPI CARDS -->
+  <section id="section-kpi" class="kpi-grid" aria-label="Key Performance Indicators">
 
-    <div class="kpi-card fade-in-up" style="--delay:0.05s">
-      <div class="kpi-icon bg-blue"><i class="fa-solid fa-database"></i></div>
+    <article class="kpi-card fade-in-up" style="--delay:0.05s" data-tooltip="Total log events ingested">
+      <div class="kpi-icon bg-blue">
+        <i class="fa-solid fa-database" aria-hidden="true"></i>
+      </div>
       <div class="kpi-body">
         <p class="kpi-label">Total Events</p>
-        <h2 class="kpi-value counter" data-target="0" id="kpi-total-events">—</h2>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-total-events" aria-live="polite">—</h2>
       </div>
-    </div>
+      <div class="kpi-trend" aria-hidden="true"><i class="fa-solid fa-arrow-trend-up"></i></div>
+    </article>
 
-    <div class="kpi-card fade-in-up" style="--delay:0.1s">
-      <div class="kpi-icon bg-orange"><i class="fa-solid fa-bug"></i></div>
+    <article class="kpi-card fade-in-up" style="--delay:0.10s" data-tooltip="Anomalies flagged by Isolation Forest">
+      <div class="kpi-icon bg-orange">
+        <i class="fa-solid fa-bug" aria-hidden="true"></i>
+      </div>
       <div class="kpi-body">
         <p class="kpi-label">Anomalies Detected</p>
-        <h2 class="kpi-value counter" data-target="0" id="kpi-anomalies">—</h2>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-anomalies" aria-live="polite">—</h2>
       </div>
-    </div>
+      <div class="kpi-trend" aria-hidden="true"><i class="fa-solid fa-arrow-trend-up"></i></div>
+    </article>
 
-    <div class="kpi-card fade-in-up" style="--delay:0.15s">
-      <div class="kpi-icon bg-red"><i class="fa-solid fa-percent"></i></div>
+    <article class="kpi-card fade-in-up" style="--delay:0.15s" data-tooltip="Ratio of anomalous to total events">
+      <div class="kpi-icon bg-red">
+        <i class="fa-solid fa-percent" aria-hidden="true"></i>
+      </div>
       <div class="kpi-body">
         <p class="kpi-label">Anomaly Rate</p>
-        <h2 class="kpi-value counter" data-target="0" data-suffix="%" id="kpi-anomaly-rate">—</h2>
+        <h2 class="kpi-value counter" data-target="0" data-suffix="%" id="kpi-anomaly-rate" aria-live="polite">—</h2>
       </div>
-    </div>
+      <div class="kpi-trend" aria-hidden="true"><i class="fa-solid fa-arrow-trend-up"></i></div>
+    </article>
 
-    <div class="kpi-card fade-in-up" style="--delay:0.2s">
-      <div class="kpi-icon bg-yellow"><i class="fa-solid fa-fire-flame-curved"></i></div>
+    <article class="kpi-card fade-in-up" style="--delay:0.20s" data-tooltip="Mean composite threat score across all events">
+      <div class="kpi-icon bg-yellow">
+        <i class="fa-solid fa-fire-flame-curved" aria-hidden="true"></i>
+      </div>
       <div class="kpi-body">
         <p class="kpi-label">Avg Threat Score</p>
-        <h2 class="kpi-value counter" data-target="0" data-decimals="2" id="kpi-avg-score">—</h2>
+        <h2 class="kpi-value counter" data-target="0" data-decimals="2" id="kpi-avg-score" aria-live="polite">—</h2>
       </div>
-    </div>
+      <div class="kpi-trend" aria-hidden="true"><i class="fa-solid fa-arrow-trend-up"></i></div>
+    </article>
 
-    <div class="kpi-card fade-in-up confidence-card" style="--delay:0.25s">
-      <div class="kpi-icon bg-teal"><i class="fa-solid fa-circle-half-stroke"></i></div>
+    <article class="kpi-card confidence-card fade-in-up" style="--delay:0.25s" data-tooltip="Model confidence based on signal quality">
+      <div class="kpi-icon bg-teal">
+        <i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i>
+      </div>
       <div class="kpi-body">
         <p class="kpi-label">Confidence Score</p>
-        <h2 class="kpi-value" id="kpi-confidence">—</h2>
-        <div class="confidence-bar-wrap">
+        <h2 class="kpi-value" id="kpi-confidence" aria-live="polite">—</h2>
+        <div class="confidence-bar-wrap" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
           <div class="confidence-bar" id="confidence-bar" style="width:0%"></div>
         </div>
       </div>
-    </div>
+    </article>
 
-    <div class="kpi-card fade-in-up" style="--delay:0.3s">
-      <div class="kpi-icon bg-purple"><i class="fa-solid fa-scale-balanced"></i></div>
+    <article class="kpi-card fade-in-up" style="--delay:0.30s" data-tooltip="Events exceeding the high-confidence anomaly threshold">
+      <div class="kpi-icon bg-purple">
+        <i class="fa-solid fa-scale-balanced" aria-hidden="true"></i>
+      </div>
       <div class="kpi-body">
         <p class="kpi-label">High-Confidence Cases</p>
-        <h2 class="kpi-value counter" data-target="0" id="kpi-high-conf">—</h2>
+        <h2 class="kpi-value counter" data-target="0" id="kpi-high-conf" aria-live="polite">—</h2>
       </div>
-    </div>
+      <div class="kpi-trend" aria-hidden="true"><i class="fa-solid fa-arrow-trend-up"></i></div>
+    </article>
 
   </section>
 
-  <!-- ================================================= CHARTS -->
-  <section id="section-charts" class="charts-grid">
+  <!-- ================================================== CHARTS -->
+  <section id="section-charts" class="charts-grid" aria-label="Analytics Charts">
 
-    <div class="chart-card fade-in-up" style="--delay:0.1s">
-      <h3 class="chart-title"><i class="fa-solid fa-circle-half-stroke"></i> Risk Distribution</h3>
-      <div class="chart-wrap">
+    <div class="chart-card fade-in-up" style="--delay:0.10s">
+      <header class="chart-header">
+        <h3 class="chart-title">
+          <i class="fa-solid fa-circle-half-stroke" aria-hidden="true"></i> Risk Distribution
+        </h3>
+        <span class="chart-badge">Doughnut</span>
+      </header>
+      <div class="chart-wrap" role="img" aria-label="Risk distribution chart">
         <canvas id="chart-risk"></canvas>
       </div>
     </div>
 
     <div class="chart-card fade-in-up" style="--delay:0.15s">
-      <h3 class="chart-title"><i class="fa-solid fa-crosshairs"></i> MITRE ATT&amp;CK Techniques</h3>
-      <div class="chart-wrap">
+      <header class="chart-header">
+        <h3 class="chart-title">
+          <i class="fa-solid fa-crosshairs" aria-hidden="true"></i> MITRE ATT&amp;CK Techniques
+        </h3>
+        <span class="chart-badge">Top 10</span>
+      </header>
+      <div class="chart-wrap" role="img" aria-label="MITRE ATT&CK techniques chart">
         <canvas id="chart-mitre"></canvas>
       </div>
     </div>
 
-    <div class="chart-card fade-in-up" style="--delay:0.2s">
-      <h3 class="chart-title"><i class="fa-solid fa-users-slash"></i> Top Risky Users</h3>
-      <div class="chart-wrap">
+    <div class="chart-card fade-in-up" style="--delay:0.20s">
+      <header class="chart-header">
+        <h3 class="chart-title">
+          <i class="fa-solid fa-users-slash" aria-hidden="true"></i> Top Risky Users
+        </h3>
+        <span class="chart-badge">By Score</span>
+      </header>
+      <div class="chart-wrap" role="img" aria-label="Top risky users chart">
         <canvas id="chart-users"></canvas>
       </div>
     </div>
 
     <div class="chart-card fade-in-up" style="--delay:0.25s">
-      <h3 class="chart-title"><i class="fa-solid fa-network-wired"></i> Top Source IPs</h3>
-      <div class="chart-wrap">
+      <header class="chart-header">
+        <h3 class="chart-title">
+          <i class="fa-solid fa-network-wired" aria-hidden="true"></i> Top Source IPs
+        </h3>
+        <span class="chart-badge">By Volume</span>
+      </header>
+      <div class="chart-wrap" role="img" aria-label="Top source IPs chart">
         <canvas id="chart-ips"></canvas>
       </div>
     </div>
 
   </section>
 
-  <!-- ================================================= TIMELINE -->
-  <section id="section-timeline" class="section-block fade-in-up" style="--delay:0.1s">
-    <h2 class="section-title"><i class="fa-solid fa-timeline"></i> Event Timeline</h2>
-    <div class="chart-card full-width">
-      <div class="chart-wrap chart-wrap-tall">
+  <!-- ================================================== TIMELINE -->
+  <section id="section-timeline" class="section-block fade-in-up" style="--delay:0.10s" aria-label="Event Timeline">
+    <h2 class="section-title">
+      <i class="fa-solid fa-timeline" aria-hidden="true"></i>
+      Event Timeline
+    </h2>
+    <div class="chart-card full-width timeline-card">
+      <header class="chart-header">
+        <h3 class="chart-title sr-only">Events over time</h3>
+        <span class="chart-badge">Hourly Buckets</span>
+      </header>
+      <div class="chart-wrap chart-wrap-tall" role="img" aria-label="Hourly event count timeline">
         <canvas id="chart-timeline"></canvas>
       </div>
     </div>
   </section>
 
-  <!-- ================================================= INCIDENTS TABLE -->
-  <section id="section-incidents" class="section-block fade-in-up" style="--delay:0.1s">
-    <h2 class="section-title"><i class="fa-solid fa-triangle-exclamation"></i> Top Incidents</h2>
+  <!-- ================================================== INCIDENTS TABLE -->
+  <section id="section-incidents" class="section-block fade-in-up" style="--delay:0.10s" aria-label="Incidents">
+    <h2 class="section-title">
+      <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+      Top Incidents
+    </h2>
     <div class="table-card">
       <div class="table-controls">
-        <input type="text" id="table-search" class="table-search" placeholder="🔍 Filter incidents…" />
-        <span class="table-count" id="table-count"></span>
+        <div class="search-wrap">
+          <i class="fa-solid fa-magnifying-glass search-icon" aria-hidden="true"></i>
+          <input type="search" id="table-search" class="table-search" placeholder="Filter by user, IP, risk, technique…" aria-label="Filter incidents" />
+        </div>
+        <span class="table-count" id="table-count" aria-live="polite"></span>
+        <button class="btn-export" id="btn-export" title="Export to CSV" aria-label="Export incidents to CSV">
+          <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+          <span>Export</span>
+        </button>
       </div>
-      <div class="table-scroll">
-        <table id="incidents-table">
+      <div class="table-scroll" role="region" aria-label="Incidents table" tabindex="0">
+        <table id="incidents-table" aria-label="Top threat incidents">
           <thead>
             <tr>
-              <th data-sort="username">User <i class="fa-solid fa-sort"></i></th>
-              <th data-sort="source_ip">Source IP <i class="fa-solid fa-sort"></i></th>
-              <th data-sort="risk_level">Risk <i class="fa-solid fa-sort"></i></th>
-              <th data-sort="threat_score">Score <i class="fa-solid fa-sort"></i></th>
-              <th>MITRE Techniques</th>
+              <th data-sort="username" scope="col">User <i class="fa-solid fa-sort" aria-hidden="true"></i></th>
+              <th data-sort="source_ip" scope="col">Source IP <i class="fa-solid fa-sort" aria-hidden="true"></i></th>
+              <th data-sort="risk_level" scope="col">Risk <i class="fa-solid fa-sort" aria-hidden="true"></i></th>
+              <th data-sort="threat_score" scope="col">Score <i class="fa-solid fa-sort" aria-hidden="true"></i></th>
+              <th scope="col">MITRE Techniques</th>
             </tr>
           </thead>
           <tbody id="incidents-tbody">
@@ -183,28 +291,52 @@
     </div>
   </section>
 
-  <!-- ================================================= SENTINEL AI -->
-  <section id="section-sentinel" class="section-block fade-in-up" style="--delay:0.1s">
-    <h2 class="section-title"><i class="fa-solid fa-robot"></i> SENTINEL AI Report</h2>
+  <!-- ================================================== SENTINEL AI -->
+  <section id="section-sentinel" class="section-block fade-in-up" style="--delay:0.10s" aria-label="SENTINEL AI Report">
+    <h2 class="section-title">
+      <i class="fa-solid fa-robot" aria-hidden="true"></i>
+      SENTINEL AI Report
+    </h2>
     <div class="sentinel-card">
       <div class="sentinel-header">
-        <p class="sentinel-desc">
-          Trigger the SENTINEL AI engine to generate a Tier-3 SOC threat intelligence report
-          powered by Ollama / Qwen2.5.
-        </p>
-        <button class="btn-sentinel" id="btn-sentinel">
-          <i class="fa-solid fa-bolt"></i> Generate SENTINEL Report
+        <div class="sentinel-meta">
+          <div class="sentinel-ai-badge">
+            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+            Powered by Ollama / Qwen2.5
+          </div>
+          <p class="sentinel-desc">
+            Trigger the SENTINEL AI engine to generate a Tier&#8209;3 SOC threat intelligence report
+            with correlated IoCs, MITRE mappings, and recommended mitigations.
+          </p>
+        </div>
+        <button class="btn-sentinel" id="btn-sentinel" aria-label="Generate SENTINEL AI report">
+          <i class="fa-solid fa-bolt" aria-hidden="true"></i>
+          <span>Generate SENTINEL Report</span>
         </button>
       </div>
-      <div class="sentinel-status hidden" id="sentinel-loading">
-        <div class="spinner"></div>
+      <div class="sentinel-status hidden" id="sentinel-loading" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true">
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+        </div>
         <span>Generating correlated threat intelligence… this may take up to 3 minutes.</span>
       </div>
-      <div class="sentinel-output hidden" id="sentinel-output"></div>
+      <div class="sentinel-output hidden" id="sentinel-output" role="article" aria-live="polite"></div>
+      <div class="sentinel-toolbar hidden" id="sentinel-toolbar">
+        <button class="btn-print-report" id="btn-print-report" aria-label="Print SENTINEL report">
+          <i class="fa-solid fa-print" aria-hidden="true"></i>
+          <span>Print Report</span>
+        </button>
+        <span class="sentinel-generated-ts" id="sentinel-generated-ts"></span>
+      </div>
     </div>
   </section>
 
 </main>
+
+<!-- Tooltip layer -->
+<div class="tooltip-layer" id="tooltip-layer" role="tooltip" aria-hidden="true"></div>
 
 <!-- Dashboard JS -->
 <script src="/static/js/dashboard.js"></script>
