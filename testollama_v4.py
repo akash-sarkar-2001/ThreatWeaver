@@ -173,64 +173,98 @@ def validate_llm_output(output: str, allowed_mitre: List[str]) -> Tuple[bool, Li
 
 def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
     """
-    Make final output compliant even if model violates constraints.
-    - Remove "known compromised" / "compromised IP" claims
-    - Remove "credential stuffing" unless allowed
-    - Remove any technique IDs not in allowed list
-    - Force MITRE section to list only allowed techniques (by ID)
+    Hard-enforce output compliance post-generation.
+    - Remove 'known compromised' / 'compromised IP' claims
+    - Remove 'credential stuffing' phrase if not in allowed list
+    - Strip entire bullet/list lines whose MITRE ID is not in allowed list
+    - Rewrite MITRE section to only list allowed techniques
+    - Remove echoed [VERIFY …] instruction blocks
+    - Remove closing meta-remarks ('By following these…' etc.)
     """
     text = output or ""
-    allowed_ids = allowed_ids_from_allowed_list(allowed_mitre)
+    allowed_ids  = allowed_ids_from_allowed_list(allowed_mitre)
     allowed_text = " ".join(allowed_mitre or []).lower()
     stuffing_allowed = "credential stuffing" in allowed_text
 
-    # 1) Remove compromised claims (soft rewrite)
-    # Replace phrases rather than deleting entire sentence to keep readability.
+    # 0) Strip echoed [VERIFY …] instruction blocks emitted by the model
+    text = re.sub(
+        r"\[VERIFY before finishing.*?\]\.?",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    # 0b) Strip common closing meta-remarks
+    closing_pats = [
+        r"By following these recommendations[^\n]*",
+        r"By implementing these[^\n]*",
+        r"These measures will[^\n]*",
+        r"In summary[,\.][^\n]*",
+    ]
+    for pat in closing_pats:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+
+    # 1) Neutralise compromised-IP/account claims
     replacements = [
-        (r"\bknown compromised\b", "suspicious"),
+        (r"\bknown compromised\b",           "suspicious"),
         (r"\bcompromised ip(?: addresses?)?\b", "suspicious IP addresses"),
-        (r"\bknown compromised accounts?\b", "suspicious accounts"),
+        (r"\bknown compromised accounts?\b",  "suspicious accounts"),
     ]
     for pat, repl in replacements:
         text = re.sub(pat, repl, text, flags=re.IGNORECASE)
 
-    # 2) Remove 'credential stuffing' phrase if not allowed
+    # 2) Ban 'credential stuffing' if not in allowed list
     if not stuffing_allowed:
         text = re.sub(r"\bcredential stuffing\b", "brute force", text, flags=re.IGNORECASE)
 
-    # 3) Drop any technique IDs not allowed (replace with nothing)
+    # 3) Strip entire bullet/numbered lines whose only MITRE ID is disallowed.
+    #    This prevents "- T1059 - Command & Scripting Interpreter: …" from surviving
+    #    even after the ID is blanked.
+    def _line_contains_only_disallowed_id(line: str) -> bool:
+        ids = extract_technique_ids(line)
+        return bool(ids) and all(tid not in allowed_ids for tid in ids)
+
+    clean_lines = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        # Only apply to bullet/numbered lines, not section headings
+        is_list_line = stripped.startswith(("-", "*", "•")) or re.match(r"^\d+[.)]", stripped)
+        if is_list_line and _line_contains_only_disallowed_id(line):
+            continue          # drop the whole line
+        clean_lines.append(line)
+    text = "\n".join(clean_lines)
+
+    # 4) Blank any remaining disallowed MITRE IDs (in flowing prose)
     def _strip_disallowed_ids(m: re.Match) -> str:
         tid = m.group(0)
         return tid if tid in allowed_ids else ""
-
     text = re.sub(r"\bT\d{4,5}(?:\.\d{3})?\b", _strip_disallowed_ids, text)
 
-    # 4) Force MITRE section lines to only allowed items
-    # If there is a MITRE section, rewrite it to list allowed techniques only.
-    # We detect headings like "### MITRE ATT&CK OBSERVATIONS" until next "###".
+    # 5) Hard-rewrite the MITRE ATT&CK OBSERVATIONS section
+    #    Replace entire section body with authoritative allowed list.
     mitre_heading = r"###\s+MITRE ATT&CK OBSERVATIONS\s*\n"
     m = re.search(mitre_heading, text, flags=re.IGNORECASE)
     if m:
         start = m.end()
-        rest = text[start:]
+        rest  = text[start:]
         next_heading = re.search(r"\n###\s+", rest)
         end = start + (next_heading.start() if next_heading else len(rest))
 
-        allowed_lines = []
         if allowed_mitre:
-            for item in allowed_mitre:
-                # only include if item still has an allowed ID
-                ids = extract_technique_ids(item)
-                if any(tid in allowed_ids for tid in ids) or not ids:
-                    allowed_lines.append(f"- **{item}**")
+            allowed_lines = [
+                f"- **{item}** — observed in incident data."
+                for item in allowed_mitre
+                if any(tid in allowed_ids for tid in extract_technique_ids(item))
+                or not extract_technique_ids(item)
+            ]
         else:
-            allowed_lines = ["No MITRE techniques provided in evidence."]
+            allowed_lines = ["No MITRE techniques observed in evidence."]
 
         new_mitre_block = "\n".join(allowed_lines) + "\n"
         text = text[:start] + new_mitre_block + text[end:]
 
-    # 5) Cleanup: remove double spaces and leftover "()" etc.
-    text = re.sub(r"[ \t]+", " ", text)
+    # 6) Cleanup whitespace artifacts
+    text = re.sub(r"[ \t]+",  " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\(\s*\)", "", text)
 
@@ -473,55 +507,224 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
 # -------------------------------------------------
 
 
+# ── Prompt serialization helpers ────────────────────────────────
+
+def _fmt_incidents(incidents: list) -> str:
+    """Format top-incident list as a readable numbered block."""
+    if not incidents:
+        return "  (no high-risk incidents)"
+    lines = []
+    for i, inc in enumerate(incidents[:8], 1):          # cap at 8 to save tokens
+        user  = inc.get("username", "N/A")
+        ip    = inc.get("source_ip", "N/A")
+        risk  = inc.get("final_risk_level", "N/A")
+        score = inc.get("total_threat_score", "N/A")
+        mitre = inc.get("mitre_techniques", "N/A")
+        lines.append(
+            f"  {i}. User={user} | IP={ip} | Risk={risk} "
+            f"| Score={score} | Techniques={mitre}"
+        )
+    return "\n".join(lines)
+
+
+def _fmt_mitre(allowed: list) -> str:
+    """Format allowed MITRE list as a compact numbered list."""
+    if not allowed:
+        return "  (no techniques observed)"
+    return "\n".join(f"  {i}. {t}" for i, t in enumerate(allowed, 1))
+
+
+def _fmt_log_metrics(label: str, m: dict) -> str:
+    """Render a LogMetrics dict into a concise text block."""
+    if not m or m.get("rows", 0) == 0:
+        return f"  {label}: no data"
+    top_ev = ", ".join(
+        f"{k}:{v}" for k, v in list(m.get("event_id_counts", {}).items())[:6]
+    ) or "N/A"
+    top_pr = ", ".join(
+        f"{k}:{v}" for k, v in list(m.get("top_processes", {}).items())[:5]
+    ) or "N/A"
+    return (
+        f"  {label}: rows={m['rows']:,} | users={m['unique_users']} "
+        f"| IPs={m['unique_ips']} | brute-suspects={m['brute_force_suspects']}\n"
+        f"    Top Event IDs: {top_ev}\n"
+        f"    Top Processes: {top_pr}"
+    )
+
+
+# ── Main prompt ──────────────────────────────────────────────────
+
 def build_prompt(summary: Dict[str, Any]) -> str:
-    return f"""
-You are SENTINEL, a Tier-3 SOC threat intelligence analyst.
+    """Build a structured, high-accuracy SOC prompt for Qwen2.5."""
 
-You MUST follow these rules exactly:
+    verdict        = summary["machine_verdict"].replace("_", " ")
+    confidence     = summary["confidence_score"]
+    anomaly_rate   = summary.get("anomaly_rate", 0)
+    total_events   = summary.get("total_events", 0)
+    total_anomalies= summary.get("total_anomalies", 0)
+    high_conf      = summary.get("high_confidence_cases", 0)
+    med_conf       = summary.get("medium_confidence_cases", 0)
+    unique_users   = summary.get("unique_high_users", 0)
+    unique_ips     = summary.get("unique_high_ips", 0)
+    allowed_mitre  = summary.get("allowed_mitre_techniques", []) or []
+    top_incidents  = summary.get("top_incidents", []) or []
+    dc_m           = summary.get("dc_log_metrics", {}) or {}
+    cl_m           = summary.get("client_log_metrics", {}) or {}
+    proc_corr      = summary.get("process_exec_near_anomalies", {}) or {}
 
-AUTHORITATIVE machine verdict: {summary['machine_verdict']}
-AUTHORITATIVE confidence score: {summary['confidence_score']}%
+    proc_matches   = proc_corr.get("matches", 0)
+    proc_window    = proc_corr.get("window_minutes", 15)
+    top_proc_str   = ", ".join(
+        f"{k}:{v}" for k, v in list(proc_corr.get("top_processes", {}).items())[:5]
+    ) or "none"
 
-Allowed MITRE techniques (closed list; do NOT add anything else):
-{summary.get('allowed_mitre_techniques', [])}
+    allowed_str   = _fmt_mitre(allowed_mitre)
+    incidents_str = _fmt_incidents(top_incidents)
+    dc_str        = _fmt_log_metrics("DC logs",     dc_m)
+    cl_str        = _fmt_log_metrics("Client logs", cl_m)
 
-Evidence (top incidents):
-{summary.get('top_incidents', [])}
+    # Derive a short risk summary sentence for priming
+    risk_sentence = (
+        f"The ML model flagged {total_anomalies:,} anomalies out of {total_events:,} events "
+        f"({anomaly_rate:.1f}% anomaly rate), with {high_conf} high-confidence and "
+        f"{med_conf} medium-confidence cases across {unique_users} distinct user(s) and "
+        f"{unique_ips} distinct source IP(s)."
+    )
 
-Hard rules:
-- Do NOT mention any MITRE technique ID not in the allowed list.
-- Do NOT mention "credential stuffing" unless it literally appears in the allowed list.
-- Do NOT call any IP "known compromised" or "compromised IP".
+    # Pre-compute whether credential stuffing is allowed so we can inject an explicit warning
+    stuffing_allowed   = any(
+        "credential stuffing" in t.lower() for t in allowed_mitre
+    )
+    stuffing_constraint = (
+        "3. 'credential stuffing' IS in the allowed technique list — you MAY reference it."
+        if stuffing_allowed else
+        "3. STRICT BAN: Do NOT write the words 'credential stuffing' ANYWHERE in the report "
+        "— not in the summary, not in patterns, not in MITRE, nowhere. "
+        "The allowed list does not contain it."
+    )
 
-Output format:
+    # Tell the model exactly how many MITRE techniques it may list
+    mitre_count = len(allowed_mitre)
+    mitre_count_note = (
+        f"There are exactly {mitre_count} technique(s) in the allowed list. "
+        f"Your MITRE ATT&CK OBSERVATIONS section MUST list exactly these {mitre_count} "
+        f"technique(s) — no more, no fewer."
+        if mitre_count > 0 else
+        "There are NO allowed techniques. Write 'No MITRE techniques observed.' in that section."
+    )
+
+    return f"""<|im_start|>system
+You are SENTINEL, a Tier-3 SOC analyst. Write evidence-based threat intelligence reports.
+NEVER add techniques not in the allowed list. NEVER echo back input data as report sections.
+<|im_end|>
+<|im_start|>user
+Write a SOC threat report. Use ONLY the EVIDENCE below. Write all six sections.
+
+--- EVIDENCE (do NOT repeat this as output) ---
+Verdict    : {verdict}
+Confidence : {confidence}%
+{risk_sentence}
+
+Log telemetry:
+{dc_str}
+{cl_str}
+Process matches near anomalies: {proc_matches} (window={proc_window}m), top: {top_proc_str}
+
+Top incidents:
+{incidents_str}
+
+Allowed MITRE techniques (ONLY these, numbered for reference):
+{allowed_str}
+--- END EVIDENCE ---
+
+RULES (strictly enforced):
+1. In the MITRE ATT&CK OBSERVATIONS section, you MUST list exactly {mitre_count} technique(s).
+   These are: {', '.join(allowed_mitre) if allowed_mitre else 'none'}.
+   Do NOT add T1059 or any other technique not in that list.
+2. Do NOT write "known compromised" or "compromised IP". Write "suspicious" instead.
+{stuffing_constraint}
+4. Do NOT invent any username, IP, or threat actor not present in the incident data above.
+5. Do NOT write anything after the ZERO TRUST HARDENING RECOMMENDATIONS section.
+
+Write the following six sections in order. Each section MUST have the exact heading shown:
+
+### EXECUTIVE THREAT SUMMARY
+2-4 sentences. State verdict, confidence %, anomaly count, scope (users, IPs).
+
+### CORRELATED ATTACK PATTERNS
+3-5 bullet points. Describe observed patterns using usernames and IPs from the incident data.
+
+### MITRE ATT&CK OBSERVATIONS
+One bullet per allowed technique. Format: `- <ID> - <Name>: <one sentence why it applies>.`
+Only use the {mitre_count} techniques listed above.
+
+### RISK CONFIDENCE LEVEL
+1-2 sentences. Justify the {confidence}% confidence and the {verdict} verdict.
+
+### PRIORITY RESPONSE ACTIONS
+Numbered list, 4-6 items. Specific actions referencing the identified users and IPs.
+
+### ZERO TRUST HARDENING RECOMMENDATIONS
+Numbered list, 4-6 items. Strategic hardening measures to prevent recurrence.
+<|im_end|>
+<|im_start|>assistant
+""".strip()
+
+
+def build_correction_prompt(original_prompt: str, bad_output: str, reasons: List[str], allowed: List[str]) -> str:
+    """Build a targeted correction prompt that shows the model exactly what to fix."""
+
+    reasons_str = "\n".join(f"  - {r}" for r in reasons)
+    allowed_str = _fmt_mitre(allowed)
+
+    # Surface just the offending fragment(s) to minimise context re-read cost
+    offending = []
+    for r in reasons:
+        # extract the quoted word/phrase from the reason string
+        m = re.search(r"'([^']+)'|: (.+)", r)
+        if m:
+            offending.append((m.group(1) or m.group(2)).strip())
+
+    offending_str = "\n".join(f"  • '{o}'" for o in offending) if offending else "  (see reasons above)"
+
+    return f"""<|im_start|>system
+You are SENTINEL, a Tier-3 SOC analyst. You write strict, evidence-based reports.
+NEVER add techniques not in the allowed list. NEVER echo input data as report sections.
+<|im_end|>
+<|im_start|>user
+Your previous report was REJECTED. Rewrite it fixing ALL issues below.
+
+Rejection reasons:
+{reasons_str}
+
+Specific content to fix:
+{offending_str}
+
+Fix rules:
+1. Remove every item listed in the rejection reasons.
+2. MITRE section must contain ONLY the techniques listed below — no T1059, no others.
+3. Replace "known compromised" / "compromised IP" with "suspicious".
+4. Do NOT write anything after ZERO TRUST HARDENING RECOMMENDATIONS.
+5. Keep all six sections with the exact headings shown.
+
+Allowed MITRE techniques (the ONLY ones permitted):
+{allowed_str}
+
+Original context:
+{original_prompt}
+
+Rejected output (rewrite this completely, fixing all violations):
+{bad_output}
+
+Write the corrected report with all six sections:
 ### EXECUTIVE THREAT SUMMARY
 ### CORRELATED ATTACK PATTERNS
 ### MITRE ATT&CK OBSERVATIONS
 ### RISK CONFIDENCE LEVEL
 ### PRIORITY RESPONSE ACTIONS
 ### ZERO TRUST HARDENING RECOMMENDATIONS
-""".strip()
-
-
-def build_correction_prompt(original_prompt: str, bad_output: str, reasons: List[str], allowed: List[str]) -> str:
-    return f"""
-You previously generated an invalid report.
-
-Reasons it was rejected:
-{reasons}
-
-Allowed MITRE techniques (closed list):
-{allowed}
-
-Rewrite the entire report and remove all rejected content.
-Do NOT say "known compromised" or "compromised IP".
-Do NOT mention credential stuffing unless it is in the allowed list.
-
-Original prompt:
-{original_prompt}
-
-Invalid output (for reference only):
-{bad_output}
+<|im_end|>
+<|im_start|>assistant
 """.strip()
 
 
@@ -541,7 +744,7 @@ def call_llm(prompt: str) -> str:
                 "temperature": 0.05,
                 "top_p": 0.8,
                 "num_ctx": 4096,
-                "num_predict": 1000,
+                "num_predict": 1500,
                 "repeat_penalty": 1.15,
             },
         },
