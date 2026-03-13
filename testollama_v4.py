@@ -35,6 +35,22 @@ MAX_LLM_ATTEMPTS = 2  # still try once to correct, but we will sanitize regardle
 # -------------------------------------------------
 
 
+def sanitize_for_prompt(text: Any) -> str:
+    """Sanitize arbitrary input to prevent LLM prompt injection."""
+    if pd.isna(text) or text is None:
+        return "N/A"
+    s = str(text)
+    # Remove LLM control tokens
+    s = re.sub(r"<\|.*?\|>", "", s)
+    # Neutralize instructional overrides
+    s = re.sub(r"(?i)\b(ignore|system\s+prompt|new\s+instructions|sysprompt)\b", "[REDACTED]", s)
+    # Restrict length
+    if len(s) > 200:
+        s = s[:197] + "..."
+    # Keep on one line
+    return s.replace("\n", " ").replace("\r", " ").strip()
+
+
 def _safe_read_csv(path: str) -> Optional[pd.DataFrame]:
     if not path:
         return None
@@ -115,7 +131,8 @@ def extract_allowed_mitre_techniques(high_risk_df: pd.DataFrame) -> List[str]:
     for raw in high_risk_df["mitre_techniques"].fillna("").astype(str).tolist():
         for t in _split_mitre_field(raw):
             t = re.sub(r"\s+", " ", t).strip()
-            if t:
+            t = sanitize_for_prompt(t)
+            if t and t != "N/A":
                 techniques.add(t)
 
     def sort_key(x: str) -> tuple:
@@ -515,11 +532,11 @@ def _fmt_incidents(incidents: list) -> str:
         return "  (no high-risk incidents)"
     lines = []
     for i, inc in enumerate(incidents[:8], 1):          # cap at 8 to save tokens
-        user  = inc.get("username", "N/A")
-        ip    = inc.get("source_ip", "N/A")
-        risk  = inc.get("final_risk_level", "N/A")
-        score = inc.get("total_threat_score", "N/A")
-        mitre = inc.get("mitre_techniques", "N/A")
+        user  = sanitize_for_prompt(inc.get("username", "N/A"))
+        ip    = sanitize_for_prompt(inc.get("source_ip", "N/A"))
+        risk  = str(inc.get("final_risk_level", "N/A"))
+        score = str(inc.get("total_threat_score", "N/A"))
+        mitre = sanitize_for_prompt(inc.get("mitre_techniques", "N/A"))
         lines.append(
             f"  {i}. User={user} | IP={ip} | Risk={risk} "
             f"| Score={score} | Techniques={mitre}"
@@ -539,10 +556,10 @@ def _fmt_log_metrics(label: str, m: dict) -> str:
     if not m or m.get("rows", 0) == 0:
         return f"  {label}: no data"
     top_ev = ", ".join(
-        f"{k}:{v}" for k, v in list(m.get("event_id_counts", {}).items())[:6]
+        f"{sanitize_for_prompt(k)}:{v}" for k, v in list(m.get("event_id_counts", {}).items())[:6]
     ) or "N/A"
     top_pr = ", ".join(
-        f"{k}:{v}" for k, v in list(m.get("top_processes", {}).items())[:5]
+        f"{sanitize_for_prompt(k)}:{v}" for k, v in list(m.get("top_processes", {}).items())[:5]
     ) or "N/A"
     return (
         f"  {label}: rows={m['rows']:,} | users={m['unique_users']} "
@@ -575,7 +592,7 @@ def build_prompt(summary: Dict[str, Any]) -> str:
     proc_matches   = proc_corr.get("matches", 0)
     proc_window    = proc_corr.get("window_minutes", 15)
     top_proc_str   = ", ".join(
-        f"{k}:{v}" for k, v in list(proc_corr.get("top_processes", {}).items())[:5]
+        f"{sanitize_for_prompt(k)}:{v}" for k, v in list(proc_corr.get("top_processes", {}).items())[:5]
     ) or "none"
 
     allowed_str   = _fmt_mitre(allowed_mitre)
