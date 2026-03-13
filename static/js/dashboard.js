@@ -1,41 +1,181 @@
 /**
- * ThreatWeaver SOC Dashboard — JavaScript
- * Chart.js visualisations + count-up + auto-refresh + SENTINEL AI
+ * ThreatWeaver SOC Dashboard — JavaScript v2
+ * Features: Chart.js visualisations · Animated particle canvas ·
+ *           Counter animations · Table sort/filter/export ·
+ *           Tooltip layer · SENTINEL AI · auto-refresh
  */
 
 'use strict';
 
-// ============================================================
+// ================================================================
 // Configuration
-// ============================================================
-const REFRESH_INTERVAL_MS = 30_000;
+// ================================================================
+const CONFIG = {
+  REFRESH_INTERVAL_MS:  30_000,
+  COUNTER_DURATION_MS:  1200,
+  PARTICLE_COUNT:       55,
+  PARTICLE_SPEED_MAX:   0.35,
+  PARTICLE_RADIUS_MAX:  2.2,
+  PARTICLE_CONNECT_DIST: 130,
+};
 
-// Chart.js global dark-theme defaults
-Chart.defaults.color = '#94a3b8';
-Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
-Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
+// ================================================================
+// Chart.js — Global dark-theme defaults
+// ================================================================
+Chart.defaults.color            = '#8a9ab5';
+Chart.defaults.borderColor      = 'rgba(255,255,255,0.05)';
+Chart.defaults.font.family      = "'Inter', 'Segoe UI', system-ui, sans-serif";
+Chart.defaults.font.size        = 12;
+Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(8, 13, 26, 0.95)';
+Chart.defaults.plugins.tooltip.borderColor     = 'rgba(0,212,255,0.3)';
+Chart.defaults.plugins.tooltip.borderWidth     = 1;
+Chart.defaults.plugins.tooltip.padding         = 10;
+Chart.defaults.plugins.tooltip.titleColor      = '#e8edf5';
+Chart.defaults.plugins.tooltip.bodyColor       = '#8a9ab5';
+Chart.defaults.plugins.tooltip.cornerRadius    = 8;
 
-// ============================================================
+// ================================================================
 // State
-// ============================================================
-const charts = {};
+// ================================================================
+const charts      = {};
 let incidentsData = [];
-let sortState = { col: 'threat_score', dir: 'desc' };
+let sortState     = { col: 'threat_score', dir: 'desc' };
 
-// ============================================================
-// Utilities
-// ============================================================
-function $(id) { return document.getElementById(id); }
+// ================================================================
+// DOM helpers
+// ================================================================
+const $ = (id) => document.getElementById(id);
 
+// ================================================================
+// Particle background
+// ================================================================
+(function initParticles() {
+  const canvas = $('bg-canvas');
+  if (!canvas) return;
+
+  /* Disable if user prefers reduced motion */
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    canvas.style.display = 'none';
+    return;
+  }
+
+  const ctx  = canvas.getContext('2d');
+  let W, H, particles;
+
+  const COLORS = ['rgba(0,212,255,', 'rgba(0,255,136,', 'rgba(179,136,255,'];
+
+  class Particle {
+    constructor() { this.reset(true); }
+    reset(init = false) {
+      this.x  = Math.random() * W;
+      this.y  = init ? Math.random() * H : -10;
+      this.r  = 0.5 + Math.random() * CONFIG.PARTICLE_RADIUS_MAX;
+      this.vx = (Math.random() - 0.5) * CONFIG.PARTICLE_SPEED_MAX;
+      this.vy = 0.08 + Math.random() * CONFIG.PARTICLE_SPEED_MAX * 0.6;
+      this.alpha = 0.15 + Math.random() * 0.45;
+      this.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    }
+    update() {
+      this.x += this.vx;
+      this.y += this.vy;
+      if (this.y > H + 10) this.reset();
+    }
+    draw() {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      ctx.fillStyle = this.color + this.alpha + ')';
+      ctx.fill();
+    }
+  }
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    particles = Array.from({ length: CONFIG.PARTICLE_COUNT }, () => new Particle());
+  }
+
+  function drawConnections() {
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx   = particles[i].x - particles[j].x;
+        const dy   = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < CONFIG.PARTICLE_CONNECT_DIST) {
+          const opacity = (1 - dist / CONFIG.PARTICLE_CONNECT_DIST) * 0.12;
+          ctx.strokeStyle = `rgba(0,212,255,${opacity})`;
+          ctx.lineWidth   = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  function animate() {
+    ctx.clearRect(0, 0, W, H);
+    drawConnections();
+    particles.forEach(p => { p.update(); p.draw(); });
+    requestAnimationFrame(animate);
+  }
+
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+  animate();
+})();
+
+// ================================================================
+// Tooltip system
+// ================================================================
+(function initTooltips() {
+  const layer = $('tooltip-layer');
+  if (!layer) return;
+
+  let hideTimer;
+
+  document.querySelectorAll('[data-tooltip]').forEach(el => {
+    el.addEventListener('mouseenter', (e) => {
+      clearTimeout(hideTimer);
+      layer.textContent = el.dataset.tooltip;
+      layer.classList.add('visible');
+      layer.setAttribute('aria-hidden', 'false');
+      positionTooltip(e);
+    });
+
+    el.addEventListener('mousemove', positionTooltip);
+
+    el.addEventListener('mouseleave', () => {
+      hideTimer = setTimeout(() => {
+        layer.classList.remove('visible');
+        layer.setAttribute('aria-hidden', 'true');
+      }, 120);
+    });
+  });
+
+  function positionTooltip(e) {
+    const margin = 12;
+    let x = e.clientX + margin;
+    let y = e.clientY - layer.offsetHeight - margin;
+    if (x + layer.offsetWidth > window.innerWidth - 8) {
+      x = e.clientX - layer.offsetWidth - margin;
+    }
+    if (y < 8) { y = e.clientY + margin; }
+    layer.style.left = x + 'px';
+    layer.style.top  = y + 'px';
+  }
+})();
+
+// ================================================================
+// Utility functions
+// ================================================================
 function animateCounter(el, target, decimals = 0, suffix = '') {
-  const duration = 1200;
-  const start = performance.now();
-  const from = 0;
+  const duration = CONFIG.COUNTER_DURATION_MS;
+  const start    = performance.now();
   function step(now) {
     const progress = Math.min((now - start) / duration, 1);
-    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-    const current = from + (target - from) * eased;
-    el.textContent = current.toFixed(decimals) + suffix;
+    const eased    = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    el.textContent = (target * eased).toFixed(decimals) + suffix;
     if (progress < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
@@ -43,19 +183,12 @@ function animateCounter(el, target, decimals = 0, suffix = '') {
 
 function riskColor(level) {
   switch ((level || '').toUpperCase()) {
-    case 'CRITICAL': return '#ff2d2d';
+    case 'CRITICAL': return '#ff3366';
     case 'HIGH':     return '#ff8c00';
     case 'MEDIUM':   return '#ffd600';
     case 'LOW':      return '#00ff88';
-    default:         return '#94a3b8';
+    default:         return '#8a9ab5';
   }
-}
-
-function formatMitrePills(raw) {
-  if (!raw) return '—';
-  return raw.split(',').map(t => t.trim()).filter(Boolean)
-    .map(t => `<span class="mitre-pill">${escapeHtml(t)}</span>`)
-    .join('');
 }
 
 function escapeHtml(str) {
@@ -64,6 +197,15 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function formatMitrePills(raw) {
+  if (!raw) return '—';
+  return raw.split(',')
+    .map(t => t.trim())
+    .filter(Boolean)
+    .map(t => `<span class="mitre-pill">${escapeHtml(t)}</span>`)
+    .join('');
 }
 
 function updateLastRefresh() {
@@ -75,49 +217,63 @@ function setVerdictBadge(verdict) {
   const el = $('verdict-badge');
   if (!el) return;
   el.textContent = (verdict || '—').replace(/_/g, ' ');
-  el.className = 'verdict-badge';
-  if ((verdict || '').includes('STRONG'))    el.classList.add('verdict-critical');
-  else if ((verdict || '').includes('MODERATE')) el.classList.add('verdict-moderate');
-  else if ((verdict || '').includes('LOW'))  el.classList.add('verdict-low');
+  el.className   = 'verdict-badge';
+  const v = (verdict || '').toUpperCase();
+  if (v.includes('STRONG'))    el.classList.add('verdict-critical');
+  else if (v.includes('MODERATE')) el.classList.add('verdict-moderate');
+  else if (v.includes('LOW'))  el.classList.add('verdict-low');
 }
 
-// ============================================================
+// ================================================================
 // Chart helpers
-// ============================================================
+// ================================================================
+const CHART_GRADIENT_CYAN  = (ctx) => {
+  const g = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height);
+  g.addColorStop(0, 'rgba(0,212,255,0.35)');
+  g.addColorStop(1, 'rgba(0,212,255,0.02)');
+  return g;
+};
+
 const CHART_PLUGIN_NODATA = {
   id: 'noDataPlugin',
   afterDraw(chart) {
-    const { datasets } = chart.data;
-    const hasData = datasets.some(d => d.data && d.data.length > 0 && d.data.some(v => v > 0));
+    const hasData = chart.data.datasets.some(
+      d => d.data && d.data.length > 0 && d.data.some(v => v > 0)
+    );
     if (hasData) return;
     const { ctx, width, height } = chart;
     ctx.save();
-    ctx.textAlign = 'center';
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#475569';
-    ctx.font = '14px "Segoe UI", system-ui';
+    ctx.fillStyle    = '#3f5070';
+    ctx.font         = `500 13px 'Inter', system-ui`;
     ctx.fillText('No data available', width / 2, height / 2);
     ctx.restore();
-  }
+  },
 };
 
 function destroyChart(id) {
   if (charts[id]) { charts[id].destroy(); delete charts[id]; }
 }
 
-// ============================================================
-// API fetch helpers
-// ============================================================
+// Shared scale options
+const darkScales = (showX = true) => ({
+  x: showX ? { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5', maxRotation: 30 } } : { display: false },
+  y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5' } },
+});
+
+// ================================================================
+// API fetch
+// ================================================================
 async function fetchJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   return res.json();
 }
 
-// ============================================================
-// Render functions
-// ============================================================
-
+// ================================================================
+// Render: Summary KPIs
+// ================================================================
 function renderSummary(data) {
   if (data.no_data) {
     $('no-data-banner').classList.remove('hidden');
@@ -127,10 +283,10 @@ function renderSummary(data) {
   setVerdictBadge(data.machine_verdict);
 
   const fields = [
-    ['kpi-total-events', data.total_events,    0, ''],
-    ['kpi-anomalies',    data.total_anomalies, 0, ''],
-    ['kpi-anomaly-rate', data.anomaly_rate,    2, '%'],
-    ['kpi-avg-score',    data.avg_threat_score,2, ''],
+    ['kpi-total-events', data.total_events,          0, ''],
+    ['kpi-anomalies',    data.total_anomalies,       0, ''],
+    ['kpi-anomaly-rate', data.anomaly_rate,          2, '%'],
+    ['kpi-avg-score',    data.avg_threat_score,      2, ''],
     ['kpi-high-conf',    data.high_confidence_cases, 0, ''],
   ];
 
@@ -139,54 +295,79 @@ function renderSummary(data) {
     if (el) animateCounter(el, Number(val) || 0, dec, sfx);
   }
 
-  // Confidence score
-  const confEl = $('kpi-confidence');
+  // Confidence bar
+  const confEl  = $('kpi-confidence');
   const confBar = $('confidence-bar');
-  const score = Number(data.confidence_score) || 0;
+  const score   = Number(data.confidence_score) || 0;
   if (confEl) confEl.textContent = score + '%';
-  if (confBar) setTimeout(() => { confBar.style.width = score + '%'; }, 100);
+  if (confBar) {
+    setTimeout(() => {
+      confBar.style.width = score + '%';
+      confBar.closest('[role="progressbar"]')?.setAttribute('aria-valuenow', score);
+    }, 120);
+  }
 }
 
+// ================================================================
+// Render: Risk doughnut
+// ================================================================
 function renderRiskChart(data) {
   if (data.no_data) return;
   destroyChart('risk');
   const ctx = $('chart-risk').getContext('2d');
+
   charts.risk = new Chart(ctx, {
     type: 'doughnut',
     data: {
       labels: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
       datasets: [{
-        data: [
-          data.CRITICAL || 0,
-          data.HIGH     || 0,
-          data.MEDIUM   || 0,
-          data.LOW      || 0,
+        data: [data.CRITICAL || 0, data.HIGH || 0, data.MEDIUM || 0, data.LOW || 0],
+        backgroundColor: [
+          'rgba(255,51,102,0.85)',
+          'rgba(255,140,0,0.85)',
+          'rgba(255,214,0,0.85)',
+          'rgba(0,255,136,0.85)',
         ],
-        backgroundColor: ['#ff2d2d', '#ff8c00', '#ffd600', '#00ff88'],
-        borderColor: '#0a0e1a',
-        borderWidth: 3,
-        hoverOffset: 8,
-      }]
+        borderColor:  '#080d1a',
+        borderWidth:  4,
+        hoverOffset:  12,
+        hoverBorderColor: ['#ff3366','#ff8c00','#ffd600','#00ff88'],
+      }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      cutout: '68%',
       plugins: {
-        legend: { position: 'bottom', labels: { padding: 16, boxWidth: 12, color: '#94a3b8' } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } }
+        legend: {
+          position: 'bottom',
+          labels: { padding: 18, boxWidth: 10, color: '#8a9ab5', font: { size: 11 } },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `  ${ctx.label}: ${ctx.parsed.toLocaleString()}`,
+          },
+        },
       },
-      animation: { duration: 900, easing: 'easeOutQuart' }
+      animation: { duration: 1000, easing: 'easeOutQuart' },
     },
-    plugins: [CHART_PLUGIN_NODATA]
+    plugins: [CHART_PLUGIN_NODATA],
   });
 }
 
+// ================================================================
+// Render: MITRE horizontal bar
+// ================================================================
 function renderMitreChart(data) {
   if (data.no_data) return;
-  const techs = data.techniques || {};
+  const techs  = data.techniques || {};
   const labels = Object.keys(techs).slice(0, 10);
   const values = labels.map(k => techs[k]);
-  const colors = ['#00d4ff','#00ff88','#b388ff','#ff8c00','#ffd600','#00e5cc','#ff2d2d','#4dd0e1','#aed581','#ef9a9a'];
+  const palette = [
+    '#00d4ff','#00ff88','#b388ff','#ff8c00',
+    '#ffd600','#00e5cc','#ff3366','#4dd0e1',
+    '#aed581','#f472b6',
+  ];
 
   destroyChart('mitre');
   const ctx = $('chart-mitre').getContext('2d');
@@ -196,12 +377,12 @@ function renderMitreChart(data) {
       labels,
       datasets: [{
         label: 'Occurrences',
-        data: values,
-        backgroundColor: labels.map((_, i) => colors[i % colors.length] + '33'),
-        borderColor:     labels.map((_, i) => colors[i % colors.length]),
-        borderWidth: 1,
-        borderRadius: 4,
-      }]
+        data:  values,
+        backgroundColor: labels.map((_, i) => palette[i % palette.length] + '28'),
+        borderColor:     labels.map((_, i) => palette[i % palette.length]),
+        borderWidth: 1.5,
+        borderRadius: 5,
+      }],
     },
     options: {
       indexAxis: 'y',
@@ -209,15 +390,18 @@ function renderMitreChart(data) {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-        y: { grid: { display: false }, ticks: { color: '#e2e8f0', font: { size: 11 } } }
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5' } },
+        y: { grid: { display: false }, ticks: { color: '#e8edf5', font: { size: 11 } } },
       },
-      animation: { duration: 900, easing: 'easeOutQuart' }
+      animation: { duration: 950, easing: 'easeOutQuart' },
     },
-    plugins: [CHART_PLUGIN_NODATA]
+    plugins: [CHART_PLUGIN_NODATA],
   });
 }
 
+// ================================================================
+// Render: Top risky users bar
+// ================================================================
 function renderUsersChart(data) {
   if (data.no_data) return;
   const users = data.users || [];
@@ -229,27 +413,28 @@ function renderUsersChart(data) {
       labels: users.map(u => u.username || 'N/A'),
       datasets: [{
         label: 'Max Threat Score',
-        data: users.map(u => u.max_threat_score),
-        backgroundColor: 'rgba(255,140,0,0.25)',
-        borderColor: '#ff8c00',
-        borderWidth: 1,
-        borderRadius: 4,
-      }]
+        data:  users.map(u => u.max_threat_score),
+        backgroundColor: 'rgba(255,140,0,0.22)',
+        borderColor:     '#ff8c00',
+        borderWidth: 1.5,
+        borderRadius: 5,
+        hoverBackgroundColor: 'rgba(255,140,0,0.38)',
+      }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', maxRotation: 30 } },
-        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
-      },
-      animation: { duration: 900, easing: 'easeOutQuart' }
+      scales: darkScales(),
+      animation: { duration: 950, easing: 'easeOutQuart' },
     },
-    plugins: [CHART_PLUGIN_NODATA]
+    plugins: [CHART_PLUGIN_NODATA],
   });
 }
 
+// ================================================================
+// Render: Top source IPs bar
+// ================================================================
 function renderIPChart(data) {
   if (data.no_data) return;
   const ips = data.ips || [];
@@ -261,67 +446,79 @@ function renderIPChart(data) {
       labels: ips.map(i => i.ip || 'N/A'),
       datasets: [{
         label: 'Event Count',
-        data: ips.map(i => i.count),
-        backgroundColor: 'rgba(0,212,255,0.2)',
-        borderColor: '#00d4ff',
-        borderWidth: 1,
-        borderRadius: 4,
-      }]
+        data:  ips.map(i => i.count),
+        backgroundColor: 'rgba(0,212,255,0.18)',
+        borderColor:     '#00d4ff',
+        borderWidth: 1.5,
+        borderRadius: 5,
+        hoverBackgroundColor: 'rgba(0,212,255,0.32)',
+      }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', maxRotation: 30 } },
-        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
-      },
-      animation: { duration: 900, easing: 'easeOutQuart' }
+      scales: darkScales(),
+      animation: { duration: 950, easing: 'easeOutQuart' },
     },
-    plugins: [CHART_PLUGIN_NODATA]
+    plugins: [CHART_PLUGIN_NODATA],
   });
 }
 
+// ================================================================
+// Render: Timeline area chart
+// ================================================================
 function renderTimeline(data) {
   if (data.no_data) return;
   const tl = data.timeline || [];
   destroyChart('timeline');
   const ctx = $('chart-timeline').getContext('2d');
+
   charts.timeline = new Chart(ctx, {
     type: 'line',
     data: {
       labels: tl.map(t => t.hour),
-      datasets: [{
-        label: 'Events',
-        data: tl.map(t => t.count),
-        borderColor: '#00d4ff',
-        backgroundColor: 'rgba(0,212,255,0.08)',
-        fill: true,
-        tension: 0.4,
-        pointRadius: 3,
-        pointBackgroundColor: '#00d4ff',
-      }]
+      datasets: [
+        {
+          label: 'Events',
+          data:  tl.map(t => t.count),
+          borderColor:     '#00d4ff',
+          backgroundColor: CHART_GRADIENT_CYAN(ctx),
+          fill:       true,
+          tension:    0.42,
+          pointRadius: 4,
+          pointHoverRadius: 7,
+          pointBackgroundColor: '#00d4ff',
+          pointBorderColor:     '#080d1a',
+          pointBorderWidth:     2,
+          borderWidth: 2,
+        },
+      ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
       plugins: { legend: { display: false } },
       scales: {
         x: {
           grid: { color: 'rgba(255,255,255,0.04)' },
-          ticks: { color: '#94a3b8', maxTicksLimit: 12, maxRotation: 30 }
+          ticks: { color: '#8a9ab5', maxTicksLimit: 14, maxRotation: 30 },
         },
-        y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#94a3b8' } }
+        y: {
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#8a9ab5' },
+        },
       },
-      animation: { duration: 900, easing: 'easeOutQuart' }
+      animation: { duration: 1000, easing: 'easeOutQuart' },
     },
-    plugins: [CHART_PLUGIN_NODATA]
+    plugins: [CHART_PLUGIN_NODATA],
   });
 }
 
-// ============================================================
-// Incidents table
-// ============================================================
+// ================================================================
+// Incidents Table
+// ================================================================
 function renderTable(data) {
   if (data.no_data) return;
   incidentsData = data.incidents || [];
@@ -334,7 +531,7 @@ function drawTable(rows) {
   if (!tbody) return;
 
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="loading-row">No incidents to display</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="loading-row">No incidents match the current filter.</td></tr>';
     return;
   }
 
@@ -351,7 +548,7 @@ function drawTable(rows) {
 
 function updateTableCount(n) {
   const el = $('table-count');
-  if (el) el.textContent = `${n} incident${n !== 1 ? 's' : ''}`;
+  if (el) el.textContent = `${n.toLocaleString()} incident${n !== 1 ? 's' : ''}`;
 }
 
 // Table search
@@ -359,12 +556,12 @@ function initTableSearch() {
   const input = $('table-search');
   if (!input) return;
   input.addEventListener('input', () => {
-    const q = input.value.toLowerCase();
+    const q        = input.value.toLowerCase();
     const filtered = incidentsData.filter(r =>
-      (r.username || '').toLowerCase().includes(q) ||
-      (r.source_ip || '').toLowerCase().includes(q) ||
-      (r.risk_level || '').toLowerCase().includes(q) ||
-      (r.mitre_techniques || '').toLowerCase().includes(q)
+      (r.username        || '').toLowerCase().includes(q) ||
+      (r.source_ip       || '').toLowerCase().includes(q) ||
+      (r.risk_level      || '').toLowerCase().includes(q) ||
+      (r.mitre_techniques|| '').toLowerCase().includes(q)
     );
     updateTableCount(filtered.length);
     drawTable(filtered);
@@ -375,59 +572,109 @@ function initTableSearch() {
 function initTableSort() {
   const table = $('incidents-table');
   if (!table) return;
+
   table.querySelectorAll('thead th[data-sort]').forEach(th => {
     th.addEventListener('click', () => {
       const col = th.dataset.sort;
+
+      // Reset all headers
+      table.querySelectorAll('thead th').forEach(h => {
+        h.classList.remove('sorted-asc', 'sorted-desc');
+      });
+
       if (sortState.col === col) {
         sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         sortState.col = col;
         sortState.dir = 'desc';
       }
+
+      th.classList.add(`sorted-${sortState.dir}`);
+
       const sorted = [...incidentsData].sort((a, b) => {
         let av = a[col] ?? '', bv = b[col] ?? '';
-        if (typeof av === 'number' || !isNaN(Number(av))) {
+        if (!isNaN(Number(av)) && !isNaN(Number(bv))) {
           av = Number(av); bv = Number(bv);
         } else {
-          av = String(av).toLowerCase(); bv = String(bv).toLowerCase();
+          av = String(av).toLowerCase();
+          bv = String(bv).toLowerCase();
         }
         if (av < bv) return sortState.dir === 'asc' ? -1 :  1;
         if (av > bv) return sortState.dir === 'asc' ?  1 : -1;
         return 0;
       });
+
       drawTable(sorted);
     });
   });
 }
 
-// ============================================================
-// SENTINEL AI report
-// ============================================================
+// CSV Export
+function initExport() {
+  const btn = $('btn-export');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (!incidentsData.length) return;
+
+    const header = ['username', 'source_ip', 'risk_level', 'threat_score', 'mitre_techniques'];
+    const rows   = incidentsData.map(r =>
+      header.map(k => JSON.stringify(r[k] ?? '')).join(',')
+    );
+    const csv  = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = `threatweaver_incidents_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+}
+
+// ================================================================
+// SENTINEL AI
+// ================================================================
 function initSentinel() {
   const btn = $('btn-sentinel');
   if (!btn) return;
+
   btn.addEventListener('click', async () => {
     const loading = $('sentinel-loading');
     const output  = $('sentinel-output');
+    const toolbar = $('sentinel-toolbar');
 
     btn.disabled = true;
     loading.classList.remove('hidden');
     output.classList.add('hidden');
     output.innerHTML = '';
+    toolbar.classList.add('hidden');
 
     try {
       const data = await fetchJSON('/api/sentinel-report');
       loading.classList.add('hidden');
+
       if (data.error) {
-        output.innerHTML = `<div class="sentinel-error"><i class="fa-solid fa-circle-exclamation"></i> ${escapeHtml(data.error)}</div>`;
+        output.innerHTML = `
+          <div class="sentinel-error">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            ${escapeHtml(data.error)}
+          </div>`;
       } else {
         output.innerHTML = renderMarkdown(data.report || '');
+        // Show toolbar with timestamp
+        const ts = $('sentinel-generated-ts');
+        if (ts) ts.textContent = 'Generated ' + new Date().toLocaleString();
+        toolbar.classList.remove('hidden');
       }
+
       output.classList.remove('hidden');
-      typewriterReveal(output);
+      fadeIn(output);
     } catch (err) {
       loading.classList.add('hidden');
-      output.innerHTML = `<div class="sentinel-error"><i class="fa-solid fa-circle-exclamation"></i> ${escapeHtml(err.message)}</div>`;
+      output.innerHTML = `
+        <div class="sentinel-error">
+          <i class="fa-solid fa-circle-exclamation"></i>
+          ${escapeHtml(err.message)}
+        </div>`;
       output.classList.remove('hidden');
     } finally {
       btn.disabled = false;
@@ -435,55 +682,73 @@ function initSentinel() {
   });
 }
 
-/** Very lightweight markdown → HTML (headings + bold only) */
+/** Lightweight markdown → HTML (h1-h3, bold, italic, hr) */
 function renderMarkdown(text) {
   return text
+    // Escape HTML first
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    // Headings
+    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^### (.+)$/gm,  '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,   '<h2 style="color:var(--text-primary);margin:16px 0 8px;">$2</h2>')
+    // Bold / italic
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,     '<em>$1</em>')
+    // Horizontal rule
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">')
+    // Line breaks
     .replace(/\n/g, '<br>');
 }
 
-/** Fade-in the output container word-by-word */
-function typewriterReveal(el) {
+/** Smooth fade-in */
+function fadeIn(el, duration = 450) {
   el.style.opacity = '0';
-  let op = 0;
-  const t = setInterval(() => {
-    op += 0.05;
-    el.style.opacity = String(Math.min(op, 1));
-    if (op >= 1) clearInterval(t);
-  }, 30);
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min((now - start) / duration, 1);
+    el.style.opacity = String(t);
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
 }
 
-// ============================================================
-// Navigation — smooth scroll & active link
-// ============================================================
+// ================================================================
+// Navigation
+// ================================================================
 function initNav() {
+  // Smooth scroll
   document.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
       const target = document.querySelector(link.getAttribute('href'));
-      if (target) target.scrollIntoView({ behavior: 'smooth' });
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   });
 
-  // Intersection Observer → update active link
+  // Intersection observer → active link
   const sections = document.querySelectorAll('section[id]');
   const observer = new IntersectionObserver(entries => {
     for (const entry of entries) {
       if (entry.isIntersecting) {
-        document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+        document.querySelectorAll('.nav-link').forEach(l => {
+          l.classList.remove('active');
+          l.removeAttribute('aria-current');
+        });
         const link = document.querySelector(`.nav-link[href="#${entry.target.id}"]`);
-        if (link) link.classList.add('active');
+        if (link) {
+          link.classList.add('active');
+          link.setAttribute('aria-current', 'page');
+        }
       }
     }
-  }, { threshold: 0.35 });
+  }, { threshold: 0.3, rootMargin: '-60px 0px -60px 0px' });
+
   sections.forEach(s => observer.observe(s));
 }
 
-// ============================================================
+// ================================================================
 // Refresh button
-// ============================================================
+// ================================================================
 function initRefreshButton() {
   const btn = $('btn-refresh');
   if (!btn) return;
@@ -493,9 +758,36 @@ function initRefreshButton() {
   });
 }
 
-// ============================================================
+// ================================================================
+// Print Report
+// ================================================================
+function initPrintReport() {
+  const btn = $('btn-print-report');
+  if (!btn) return;
+
+  btn.addEventListener('click', () => {
+    const output = $('sentinel-output');
+    if (!output || output.classList.contains('hidden')) return;
+
+    // Inject a print-only branded header (hidden on screen via CSS)
+    const tsText = $('sentinel-generated-ts')?.textContent || '';
+    const header = document.createElement('div');
+    header.className = 'print-report-header';
+    header.innerHTML =
+      '<h1>&#x1F6E1;&#xFE0F; ThreatWeaver &mdash; SENTINEL AI Threat Intelligence Report</h1>' +
+      '<p>' + escapeHtml(tsText) + ' &nbsp;&middot;&nbsp; Confidential &mdash; For SOC Internal Use Only</p>';
+    output.prepend(header);
+
+    window.print();
+
+    // Remove injected header after print dialog closes so screen view is clean
+    header.remove();
+  });
+}
+
+// ================================================================
 // Main data loader
-// ============================================================
+// ================================================================
 async function loadAll() {
   try {
     const [summary, risk, incidents, mitre, timeline, users, ips] = await Promise.all([
@@ -517,21 +809,23 @@ async function loadAll() {
     renderTable(incidents);
     updateLastRefresh();
   } catch (err) {
-    console.error('Dashboard load error:', err);
+    console.error('[ThreatWeaver] Dashboard load error:', err);
   }
 }
 
-// ============================================================
-// Initialise
-// ============================================================
+// ================================================================
+// Bootstrap
+// ================================================================
 document.addEventListener('DOMContentLoaded', () => {
   initNav();
   initRefreshButton();
   initTableSearch();
   initTableSort();
+  initExport();
   initSentinel();
+  initPrintReport();
   loadAll();
 
-  // Auto-refresh every 30 s
-  setInterval(loadAll, REFRESH_INTERVAL_MS);
+  // Auto-refresh
+  setInterval(loadAll, CONFIG.REFRESH_INTERVAL_MS);
 });
