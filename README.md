@@ -14,11 +14,14 @@ ThreatWeaver is a correlated Zero Trust security engine that fuses ML anomaly de
 
 ## Key Capabilities
 
-- **Hybrid detection**: Isolation Forest ML anomaly detection + 9 rule-based detection layers
-- **MITRE ATT&CK mapping**: Brute Force, Password Spraying, Kerberoasting, Lateral Movement, and more
-- **Constrained AI reporting**: SENTINEL LLM engine enforces a strict allowed-techniques list, preventing hallucinated MITRE IDs
-- **SOC dashboard**: REST API + UI with risk distribution, timelines, top incidents, user risk, and IP analysis
-- **Secure log transfer**: Optional HTTPS-based client → server log uploader
+- **Hybrid Detection**: Isolation Forest ML anomaly detection + 9 rule-based detection layers.
+- **MITRE ATT&CK Mapping**: Brute Force, Password Spraying, Kerberoasting, Lateral Movement, and more.
+- **High-Accuracy AI Reporting (SENTINEL)**: Hardened prompt engineering system forces local LLMs (Qwen2.5:3b) to strictly adhere to observed evidence, preventing hallucinated techniques and speculation.
+- **Premium SOC Dashboard**: A "Glassmorphism 2.0" responsive web UI with a dynamic particle background, real-time risk distribution, event timelines, and interactive tooltips.
+- **Actionable Workflows**: 
+  - One-click **CSV Export** for forensic analysis in Excel/Splunk.
+  - One-click **Print Report** for generating clean, branded, PDF-ready threat briefs.
+- **Secure Log Transfer**: Optional HTTPS-based client → server log uploader.
 
 ---
 
