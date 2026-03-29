@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ThreatWeaver · Zero Trust Authentication</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
+
+  <link rel="stylesheet" href="/static/css/dashboard.css" />
+</head>
+<body>
+
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+<div class="login-wrapper fade-in-up">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-icon-wrap" style="width: 54px; height: 54px; font-size: 1.6rem; margin: 0 auto 16px;">
+        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+      </div>
+      <h1 class="logo-text" style="font-size: 1.8rem; margin-bottom: 8px;">ThreatWeaver SOC</h1>
+      <p class="login-subtitle">Zero Trust Access Analyzer</p>
+    </div>
+    
+    <div class="login-divider"></div>
+    
+    <div class="login-action">
+      <p class="login-instruction"><i class="fa-solid fa-lock"></i> Restricted access. Authenticate to proceed.</p>
+      
+      <a href="/login/github" class="btn-github">
+        <i class="fa-brands fa-github"></i>
+        Authenticate with GitHub
+      </a>
+    </div>
+  </div>
+</div>
+
+<script>
+  const CONFIG = { PARTICLE_COUNT: 40, PARTICLE_SPEED_MAX: 0.35, PARTICLE_RADIUS_MAX: 2.2, PARTICLE_CONNECT_DIST: 130 };
+  const canvas = document.getElementById('bg-canvas');
+  if (canvas && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const ctx = canvas.getContext('2d');
+    let W, H, particles;
+    const COLORS = ['rgba(0,212,255,', 'rgba(0,255,136,', 'rgba(179,136,255,'];
+    class Particle {
+      constructor() { this.reset(true); }
+      reset(init = false) {
+        this.x = Math.random() * W; this.y = init ? Math.random() * H : -10;
+        this.r = 0.5 + Math.random() * CONFIG.PARTICLE_RADIUS_MAX;
+        this.vx = (Math.random() - 0.5) * CONFIG.PARTICLE_SPEED_MAX;
+        this.vy = 0.08 + Math.random() * CONFIG.PARTICLE_SPEED_MAX * 0.6;
+        this.alpha = 0.15 + Math.random() * 0.45;
+        this.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+      }
+      update() { this.x += this.vx; this.y += this.vy; if (this.y > H + 10) this.reset(); }
+      draw() { ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2); ctx.fillStyle = this.color + this.alpha + ')'; ctx.fill(); }
+    }
+    function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; particles = Array.from({ length: CONFIG.PARTICLE_COUNT }, () => new Particle()); }
+    function drawConnections() {
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x, dy = particles[i].y - particles[j].y, dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < CONFIG.PARTICLE_CONNECT_DIST) {
+            ctx.strokeStyle = `rgba(0,212,255,${(1 - dist / CONFIG.PARTICLE_CONNECT_DIST) * 0.12})`; ctx.lineWidth = 0.6;
+            ctx.beginPath(); ctx.moveTo(particles[i].x, particles[i].y); ctx.lineTo(particles[j].x, particles[j].y); ctx.stroke();
+          }
+        }
+      }
+    }
+    function animate() { ctx.clearRect(0, 0, W, H); drawConnections(); particles.forEach(p => { p.update(); p.draw(); }); requestAnimationFrame(animate); }
+    window.addEventListener('resize', resize, { passive: true }); resize(); animate();
+  }
+</script>
+</body>
+</html>
