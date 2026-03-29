@@ -2,30 +2,40 @@
 """
 SENTINEL AI Threat Intelligence Engine v4
 MITRE-Aware | Confidence-Scored | SOC-Grade Output
-Optimized for Ollama + Qwen2.5
+Optimized for Ollama + Qwen2.5 (PostgreSQL Database Edition)
 """
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-
+import time
 import pandas as pd
 import requests
+from sqlalchemy import create_engine
+import dotenv
+
+dotenv.load_dotenv()
 
 # -------------------------------------------------
-# CONFIG
+# DATABASE & OLLAMA CONFIG
 # -------------------------------------------------
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_NAME = os.getenv("DB_NAME", "threatweaver_db")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASS = os.getenv("DB_PASS")
+DB_PORT = os.getenv("DB_PORT", "5432")
 
-DEFAULT_ANALYSIS_CSV = "advanced_security_analysis.csv"
-DEFAULT_DC_LOGS_CSV = "dc_logs.csv"
-DEFAULT_CLIENT_LOGS_CSV = "client_logs.csv"
+# Safely encode the password
+SAFE_DB_PASS = urllib.parse.quote_plus(DB_PASS)
+DB_URI = f"postgresql://{DB_USER}:{SAFE_DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+engine = create_engine(DB_URI)
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://Akash:11434/api/generate")
+OLLAMA_URL = os.getenv("OLLAMA_URL")
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
 MAX_LLM_ATTEMPTS = 2  # still try once to correct, but we will sanitize regardless
@@ -34,59 +44,35 @@ MAX_LLM_ATTEMPTS = 2  # still try once to correct, but we will sanitize regardle
 # HELPERS
 # -------------------------------------------------
 
-
 def sanitize_for_prompt(text: Any) -> str:
     """Sanitize arbitrary input to prevent LLM prompt injection."""
     if pd.isna(text) or text is None:
         return "N/A"
     s = str(text)
-    # Remove LLM control tokens
     s = re.sub(r"<\|.*?\|>", "", s)
-    # Neutralize instructional overrides
     s = re.sub(r"(?i)\b(ignore|system\s+prompt|new\s+instructions|sysprompt)\b", "[REDACTED]", s)
-    # Restrict length
     if len(s) > 200:
         s = s[:197] + "..."
-    # Keep on one line
     return s.replace("\n", " ").replace("\r", " ").strip()
 
 
-def _safe_read_csv(path: str) -> Optional[pd.DataFrame]:
-    if not path:
-        return None
-    if not os.path.exists(path):
-        return None
-    try:
-        return pd.read_csv(path, low_memory=False)
-    except Exception:
-        return None
-
-
 def _parse_mixed_timestamp(value: Any) -> Optional[pd.Timestamp]:
-    """Parse timestamps that may look like:
-    - '2026-03-04 22:44:58'
-    - 'Wed Mar  4 23:07:54 2026'
-    """
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
-
     s = str(value).strip()
     if not s:
         return None
-
     try:
         ts = pd.to_datetime(s, errors="coerce")
         if not pd.isna(ts):
             return ts
     except Exception:
         pass
-
     for fmt in ("%Y-%m-%d %H:%M:%S", "%a %b %d %H:%M:%S %Y"):
         try:
             return pd.Timestamp(datetime.strptime(s, fmt))
         except Exception:
             continue
-
     return None
 
 
@@ -187,31 +173,14 @@ def validate_llm_output(output: str, allowed_mitre: List[str]) -> Tuple[bool, Li
 # OUTPUT SANITIZATION (HARD ENFORCEMENT)
 # -------------------------------------------------
 
-
 def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
-    """
-    Hard-enforce output compliance post-generation.
-    - Remove 'known compromised' / 'compromised IP' claims
-    - Remove 'credential stuffing' phrase if not in allowed list
-    - Strip entire bullet/list lines whose MITRE ID is not in allowed list
-    - Rewrite MITRE section to only list allowed techniques
-    - Remove echoed [VERIFY …] instruction blocks
-    - Remove closing meta-remarks ('By following these…' etc.)
-    """
     text = output or ""
     allowed_ids  = allowed_ids_from_allowed_list(allowed_mitre)
     allowed_text = " ".join(allowed_mitre or []).lower()
     stuffing_allowed = "credential stuffing" in allowed_text
 
-    # 0) Strip echoed [VERIFY …] instruction blocks emitted by the model
-    text = re.sub(
-        r"\[VERIFY before finishing.*?\]\.?",
-        "",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    # 0b) Strip common closing meta-remarks
+    text = re.sub(r"\[VERIFY before finishing.*?\]\.?", "", text, flags=re.IGNORECASE | re.DOTALL)
+    
     closing_pats = [
         r"By following these recommendations[^\n]*",
         r"By implementing these[^\n]*",
@@ -221,7 +190,6 @@ def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
     for pat in closing_pats:
         text = re.sub(pat, "", text, flags=re.IGNORECASE)
 
-    # 1) Neutralise compromised-IP/account claims
     replacements = [
         (r"\bknown compromised\b",           "suspicious"),
         (r"\bcompromised ip(?: addresses?)?\b", "suspicious IP addresses"),
@@ -230,13 +198,9 @@ def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
     for pat, repl in replacements:
         text = re.sub(pat, repl, text, flags=re.IGNORECASE)
 
-    # 2) Ban 'credential stuffing' if not in allowed list
     if not stuffing_allowed:
         text = re.sub(r"\bcredential stuffing\b", "brute force", text, flags=re.IGNORECASE)
 
-    # 3) Strip entire bullet/numbered lines whose only MITRE ID is disallowed.
-    #    This prevents "- T1059 - Command & Scripting Interpreter: …" from surviving
-    #    even after the ID is blanked.
     def _line_contains_only_disallowed_id(line: str) -> bool:
         ids = extract_technique_ids(line)
         return bool(ids) and all(tid not in allowed_ids for tid in ids)
@@ -244,21 +208,17 @@ def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
     clean_lines = []
     for line in text.split("\n"):
         stripped = line.lstrip()
-        # Only apply to bullet/numbered lines, not section headings
         is_list_line = stripped.startswith(("-", "*", "•")) or re.match(r"^\d+[.)]", stripped)
         if is_list_line and _line_contains_only_disallowed_id(line):
-            continue          # drop the whole line
+            continue          
         clean_lines.append(line)
     text = "\n".join(clean_lines)
 
-    # 4) Blank any remaining disallowed MITRE IDs (in flowing prose)
     def _strip_disallowed_ids(m: re.Match) -> str:
         tid = m.group(0)
         return tid if tid in allowed_ids else ""
     text = re.sub(r"\bT\d{4,5}(?:\.\d{3})?\b", _strip_disallowed_ids, text)
 
-    # 5) Hard-rewrite the MITRE ATT&CK OBSERVATIONS section
-    #    Replace entire section body with authoritative allowed list.
     mitre_heading = r"###\s+MITRE ATT&CK OBSERVATIONS\s*\n"
     m = re.search(mitre_heading, text, flags=re.IGNORECASE)
     if m:
@@ -280,7 +240,6 @@ def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
         new_mitre_block = "\n".join(allowed_lines) + "\n"
         text = text[:start] + new_mitre_block + text[end:]
 
-    # 6) Cleanup whitespace artifacts
     text = re.sub(r"[ \t]+",  " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\(\s*\)", "", text)
@@ -291,7 +250,6 @@ def sanitize_output(output: str, allowed_mitre: List[str]) -> str:
 # -------------------------------------------------
 # RAW LOG METRICS
 # -------------------------------------------------
-
 
 @dataclass
 class LogMetrics:
@@ -319,16 +277,7 @@ class LogMetrics:
 
 def analyze_raw_logs(df: Optional[pd.DataFrame]) -> LogMetrics:
     if df is None or df.empty:
-        return LogMetrics(
-            rows=0,
-            event_id_counts={},
-            top_processes={},
-            top_commands={},
-            unique_users=0,
-            unique_ips=0,
-            brute_force_suspects=0,
-            top_bruteforce_pairs={},
-        )
+        return LogMetrics(rows=0, event_id_counts={}, top_processes={}, top_commands={}, unique_users=0, unique_ips=0, brute_force_suspects=0, top_bruteforce_pairs={})
 
     for col in ["timestamp", "event_id", "username", "source_ip", "process_name", "command_line"]:
         if col not in df.columns:
@@ -417,41 +366,56 @@ def compute_process_exec_near_anomalies(
     return {"window_minutes": window_minutes, "matches": int(len(matched_df)), "top_processes": top_proc}
 
 
-# -------------------------------------------------
-# LOAD & ANALYZE
-# -------------------------------------------------
+# =====================================================
+# IN-MEMORY CACHE SYSTEM
+# =====================================================
+LLM_CACHE_TTL = 120  # Keep LLM context cached for 2 minutes
+_SUMMARY_CACHE = None
+_SUMMARY_CACHE_TIME = 0
 
+def load_and_analyze() -> Dict[str, Any]:
+    global _SUMMARY_CACHE, _SUMMARY_CACHE_TIME
+    current_time = time.time()
 
-def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs_path: str = "") -> Dict[str, Any]:
-    df = pd.read_csv(analysis_csv_path, low_memory=False)
+    # 1. Check if we already calculated the metrics recently
+    if _SUMMARY_CACHE is not None and (current_time - _SUMMARY_CACHE_TIME) < LLM_CACHE_TTL:
+        print("[*] Fast-loading CACHED database metrics for SENTINEL AI...")
+        return _SUMMARY_CACHE
 
-    required_cols = [
-        "timestamp",
-        "is_anomaly",
-        "final_risk_level",
-        "total_threat_score",
-        "username",
-        "source_ip",
-        "mitre_techniques",
-    ]
+    print("[*] Fetching analyzed_logs from database...")
+    try:
+        df = pd.read_sql("SELECT * FROM analyzed_logs", engine)
+    except Exception as e:
+        print(f"[-] Database Error (analyzed_logs): {e}")
+        raise SystemExit("Ensure train_isolation_forest.py has run successfully.")
+
+    print("[*] Fetching raw_logs from database...")
+    try:
+        raw_df = pd.read_sql("SELECT * FROM raw_logs", engine)
+        dc_df = raw_df[raw_df["source_machine"] == "DOMAIN_CONTROLLER"]
+        client_df = raw_df[raw_df["source_machine"] == "CLIENT_MACHINE"]
+    except Exception as e:
+        print(f"[-] Database Error (raw_logs): {e}")
+        dc_df, client_df, raw_df = None, None, None
+
+    # ... (Keep ALL of your existing dataframe processing logic here exactly as it was) ...
+    
+    required_cols = ["timestamp", "is_anomaly", "final_risk_level", "total_threat_score", "username", "source_ip", "mitre_techniques"]
     for col in required_cols:
         if col not in df.columns:
             df[col] = None
 
     anomalies = df[df["is_anomaly"] == 1]
     high_risk = df[df["final_risk_level"].isin(["CRITICAL", "HIGH"])]
-
     total_events = len(df)
     total_anomalies = len(anomalies)
     anomaly_rate = round((total_anomalies / total_events) * 100, 2) if total_events else 0
     risk_distribution = df["final_risk_level"].value_counts().to_dict()
-
     scores = pd.to_numeric(df["total_threat_score"], errors="coerce")
     avg_threat_score = round(scores.mean(), 2) if total_events else 0
     high_confidence_cases = int((scores >= 7).sum())
     medium_confidence_cases = int(scores.between(4, 6, inclusive="both").sum())
     low_confidence_cases = int((scores <= 3).sum())
-
     unique_high_users = int(high_risk["username"].nunique())
     unique_high_ips = int(high_risk["source_ip"].nunique())
     unique_mitre = int(high_risk["mitre_techniques"].nunique())
@@ -467,71 +431,43 @@ def load_and_analyze(analysis_csv_path: str, dc_logs_path: str = "", client_logs
     else:
         machine_verdict = "LOW_CONFIDENCE_ACTIVITY"
 
-    confidence_score = min(
-        100,
-        round(
-            (high_confidence_cases * 5)
-            + (medium_confidence_cases * 2)
-            + (unique_mitre * 3)
-            + (unique_high_ips * 2),
-            2,
-        ),
-    )
+    confidence_score = min(100, round((high_confidence_cases * 5) + (medium_confidence_cases * 2) + (unique_mitre * 3) + (unique_high_ips * 2), 2))
 
-    top_incidents = (
-        high_risk.sort_values("total_threat_score", ascending=False)
-        .head(10)[["username", "source_ip", "final_risk_level", "total_threat_score", "mitre_techniques"]]
-        .to_dict(orient="records")
-    )
-
+    top_incidents = high_risk.sort_values("total_threat_score", ascending=False).head(10)[["username", "source_ip", "final_risk_level", "total_threat_score", "mitre_techniques"]].to_dict(orient="records")
     allowed_mitre_techniques = extract_allowed_mitre_techniques(high_risk)
-
-    dc_df = _safe_read_csv(dc_logs_path)
-    client_df = _safe_read_csv(client_logs_path)
 
     dc_metrics = analyze_raw_logs(dc_df)
     client_metrics = analyze_raw_logs(client_df)
+    proc_corr = compute_process_exec_near_anomalies(df, dc_df if (dc_df is not None and not dc_df.empty) else client_df, window_minutes=15)
 
-    proc_corr = compute_process_exec_near_anomalies(df, dc_df if dc_df is not None else client_df, window_minutes=15)
-
-    return {
-        "total_events": total_events,
-        "total_anomalies": total_anomalies,
-        "anomaly_rate": anomaly_rate,
-        "risk_distribution": risk_distribution,
-        "avg_threat_score": avg_threat_score,
-        "high_confidence_cases": high_confidence_cases,
-        "medium_confidence_cases": medium_confidence_cases,
-        "low_confidence_cases": low_confidence_cases,
-        "unique_high_users": unique_high_users,
-        "unique_high_ips": unique_high_ips,
-        "unique_mitre_techniques": unique_mitre,
-        "multi_user_flag": multi_user_flag,
-        "multi_ip_flag": multi_ip_flag,
-        "multi_technique_flag": multi_technique_flag,
-        "machine_verdict": machine_verdict,
-        "confidence_score": confidence_score,
-        "top_incidents": top_incidents,
-        "allowed_mitre_techniques": allowed_mitre_techniques,
-        "dc_log_metrics": dc_metrics.to_dict(),
-        "client_log_metrics": client_metrics.to_dict(),
-        "process_exec_near_anomalies": proc_corr,
+    # Compile the final dictionary
+    final_summary = {
+        "total_events": total_events, "total_anomalies": total_anomalies, "anomaly_rate": anomaly_rate,
+        "risk_distribution": risk_distribution, "avg_threat_score": avg_threat_score,
+        "high_confidence_cases": high_confidence_cases, "medium_confidence_cases": medium_confidence_cases,
+        "low_confidence_cases": low_confidence_cases, "unique_high_users": unique_high_users,
+        "unique_high_ips": unique_high_ips, "unique_mitre_techniques": unique_mitre,
+        "multi_user_flag": multi_user_flag, "multi_ip_flag": multi_ip_flag, "multi_technique_flag": multi_technique_flag,
+        "machine_verdict": machine_verdict, "confidence_score": confidence_score, "top_incidents": top_incidents,
+        "allowed_mitre_techniques": allowed_mitre_techniques, "dc_log_metrics": dc_metrics.to_dict(),
+        "client_log_metrics": client_metrics.to_dict(), "process_exec_near_anomalies": proc_corr,
     }
 
+    # 2. Save the result to RAM for the next 2 minutes
+    _SUMMARY_CACHE = final_summary
+    _SUMMARY_CACHE_TIME = current_time
+    
+    return final_summary
 
 # -------------------------------------------------
 # PROMPT BUILDER
 # -------------------------------------------------
 
-
-# ── Prompt serialization helpers ────────────────────────────────
-
 def _fmt_incidents(incidents: list) -> str:
-    """Format top-incident list as a readable numbered block."""
     if not incidents:
         return "  (no high-risk incidents)"
     lines = []
-    for i, inc in enumerate(incidents[:8], 1):          # cap at 8 to save tokens
+    for i, inc in enumerate(incidents[:8], 1):         
         user  = sanitize_for_prompt(inc.get("username", "N/A"))
         ip    = sanitize_for_prompt(inc.get("source_ip", "N/A"))
         risk  = str(inc.get("final_risk_level", "N/A"))
@@ -545,14 +481,12 @@ def _fmt_incidents(incidents: list) -> str:
 
 
 def _fmt_mitre(allowed: list) -> str:
-    """Format allowed MITRE list as a compact numbered list."""
     if not allowed:
         return "  (no techniques observed)"
     return "\n".join(f"  {i}. {t}" for i, t in enumerate(allowed, 1))
 
 
 def _fmt_log_metrics(label: str, m: dict) -> str:
-    """Render a LogMetrics dict into a concise text block."""
     if not m or m.get("rows", 0) == 0:
         return f"  {label}: no data"
     top_ev = ", ".join(
@@ -569,11 +503,7 @@ def _fmt_log_metrics(label: str, m: dict) -> str:
     )
 
 
-# ── Main prompt ──────────────────────────────────────────────────
-
 def build_prompt(summary: Dict[str, Any]) -> str:
-    """Build a structured, high-accuracy SOC prompt for Qwen2.5."""
-
     verdict        = summary["machine_verdict"].replace("_", " ")
     confidence     = summary["confidence_score"]
     anomaly_rate   = summary.get("anomaly_rate", 0)
@@ -600,7 +530,6 @@ def build_prompt(summary: Dict[str, Any]) -> str:
     dc_str        = _fmt_log_metrics("DC logs",     dc_m)
     cl_str        = _fmt_log_metrics("Client logs", cl_m)
 
-    # Derive a short risk summary sentence for priming
     risk_sentence = (
         f"The ML model flagged {total_anomalies:,} anomalies out of {total_events:,} events "
         f"({anomaly_rate:.1f}% anomaly rate), with {high_conf} high-confidence and "
@@ -608,7 +537,6 @@ def build_prompt(summary: Dict[str, Any]) -> str:
         f"{unique_ips} distinct source IP(s)."
     )
 
-    # Pre-compute whether credential stuffing is allowed so we can inject an explicit warning
     stuffing_allowed   = any(
         "credential stuffing" in t.lower() for t in allowed_mitre
     )
@@ -620,7 +548,6 @@ def build_prompt(summary: Dict[str, Any]) -> str:
         "The allowed list does not contain it."
     )
 
-    # Tell the model exactly how many MITRE techniques it may list
     mitre_count = len(allowed_mitre)
     mitre_count_note = (
         f"There are exactly {mitre_count} technique(s) in the allowed list. "
@@ -689,15 +616,11 @@ Numbered list, 4-6 items. Strategic hardening measures to prevent recurrence.
 
 
 def build_correction_prompt(original_prompt: str, bad_output: str, reasons: List[str], allowed: List[str]) -> str:
-    """Build a targeted correction prompt that shows the model exactly what to fix."""
-
     reasons_str = "\n".join(f"  - {r}" for r in reasons)
     allowed_str = _fmt_mitre(allowed)
 
-    # Surface just the offending fragment(s) to minimise context re-read cost
     offending = []
     for r in reasons:
-        # extract the quoted word/phrase from the reason string
         m = re.search(r"'([^']+)'|: (.+)", r)
         if m:
             offending.append((m.group(1) or m.group(2)).strip())
@@ -749,7 +672,6 @@ Write the corrected report with all six sections:
 # OLLAMA CALL
 # -------------------------------------------------
 
-
 def call_llm(prompt: str) -> str:
     response = requests.post(
         OLLAMA_URL,
@@ -798,30 +720,15 @@ def generate_report(summary: Dict[str, Any]) -> Tuple[str, Optional[List[str]]]:
 # MAIN
 # -------------------------------------------------
 
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="SENTINEL AI Threat Intelligence Engine")
-    p.add_argument("--analysis-csv", default=os.getenv("ANALYSIS_CSV", DEFAULT_ANALYSIS_CSV))
-    p.add_argument("--dc-logs", default=os.getenv("DC_LOGS_CSV", DEFAULT_DC_LOGS_CSV))
-    p.add_argument("--client-logs", default=os.getenv("CLIENT_LOGS_CSV", DEFAULT_CLIENT_LOGS_CSV))
-    return p.parse_args()
-
-
 def main() -> None:
-    args = parse_args()
-
-    print("Loading advanced security analysis...")
-    if not os.path.exists(args.analysis_csv):
-        raise SystemExit(f"Missing analysis CSV: {args.analysis_csv}")
-
-    summary = load_and_analyze(args.analysis_csv, dc_logs_path=args.dc_logs, client_logs_path=args.client_logs)
+    print("Building SOC-grade intelligence prompt from Database...")
+    summary = load_and_analyze()
 
     if summary["total_anomalies"] == 0:
-        print("No anomalies detected.")
+        print("No anomalies detected in the database.")
         return
 
-    print("Building SOC-grade intelligence prompt...")
-    print("Generating correlated threat intelligence...")
+    print("Generating correlated threat intelligence via Ollama...")
 
     raw_output, rejection_reasons = generate_report(summary)
     allowed = summary.get("allowed_mitre_techniques", []) or []
