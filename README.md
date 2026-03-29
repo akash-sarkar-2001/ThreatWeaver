@@ -25,30 +25,30 @@ ThreatWeaver is an end-to-end threat detection platform built for Windows Active
 
 ```
 ┌─────────────────────┐     ┌──────────────────────┐
-│  Domain Controller  │     │    Client Machine     │
-│   (server-log.py)   │     │   (client-log.py)     │
-│                     │     │                       │
-│  Reads Event IDs:   │     │  Reads Event IDs:     │
-│  4624, 4625, 4672,  │     │  4624, 4625, 4688     │
-│  4768, 4769, 4688   │     │                       │
-└────────┬────────────┘     └───────────┬───────────┘
-         │  Direct DB Insert                │  HTTPS + API Key
-         │                                  ▼
-         │                    ┌──────────────────────────┐
-         │                    │  secure_log_server.py     │
-         │                    │  (Flask REST API on :5000)│
-         │                    └────────────┬─────────────┘
+│  Domain Controller  │     │    Client Machine    │
+│   (server-log.py)   │     │   (client-log.py)    │
+│                     │     │                      │
+│  Reads Event IDs:   │     │  Reads Event IDs:    │
+│  4624, 4625, 4672,  │     │  4624, 4625, 4688    │
+│  4768, 4769, 4688   │     │                      │
+└────────┬────────────┘     └───────────┬──────────┘
+         │  Direct DB Insert            │  HTTPS + API Key
+         │                              ▼
+         │                    ┌────────────────────────────┐
+         │                    │  secure_log_server.py      │
+         │                    │  (Flask REST API on :5000) │
+         │                    └────────────┬───────────────┘
          │                                 │
          ▼                                 ▼
 ┌──────────────────────────────────────────────────────┐
-│              PostgreSQL (raw_logs table)              │
-│                   TimescaleDB Hypertable              │
+│            PostgreSQL (raw_logs table)               │
+│               TimescaleDB Hypertable                 │
 └────────────────────────┬─────────────────────────────┘
                          │
                          ▼
           ┌──────────────────────────────┐
-          │   train_isolation_forest.py   │
-          │   (ML + Rules Detection)      │
+          │   train_isolation_forest.py  │
+          │   (ML + Rules Detection)     │
           │                              │
           │  • Isolation Forest Model    │
           │  • 9 Detection Rules         │
@@ -57,17 +57,17 @@ ThreatWeaver is an end-to-end threat detection platform built for Windows Active
           └──────────────┬───────────────┘
                          │
                          ▼
-          ┌──────────────────────────────┐
+          ┌───────────────────────────────┐
           │   PostgreSQL (analyzed_logs)  │
-          └──────┬───────────────┬───────┘
+          └──────┬───────────────┬────────┘
                  │               │
                  ▼               ▼
-     ┌───────────────┐  ┌──────────────────┐
+     ┌────────────────┐  ┌───────────────────┐
      │ dashboard.py   │  │  testollama.py    │
      │ (SOC Dashboard │  │  (SENTINEL AI     │
-     │  on :5001)     │  │   Threat Reports) │
+     │  on :5001)     │  │  Threat Reports)  │
      │ GitHub OAuth   │  │  Ollama + Qwen2.5 │
-     └───────────────┘  └──────────────────┘
+     └────────────────┘  └───────────────────┘
 ```
 
 ---
