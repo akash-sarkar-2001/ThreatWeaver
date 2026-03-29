@@ -1,94 +1,77 @@
-from flask import Flask, request, abort
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from werkzeug.utils import secure_filename
+from flask import Flask, request, jsonify, abort
+import psycopg2
+from psycopg2 import extras
 import os
-from datetime import datetime
-import uuid
+import dotenv
+
+dotenv.load_dotenv()
+
+app = Flask(__name__)
 
 # ====================================================
 # CONFIGURATION
 # ====================================================
-
-UPLOAD_FOLDER = r"C:\Users\Server-PC\Desktop\log-collector"
-ALLOWED_EXTENSIONS = {"csv"}
-API_KEY = "ThreatWeaverSecureKey123"
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-app = Flask(__name__)
-
-# Rate limiter
-limiter = Limiter(
-    get_remote_address,
-    app=app,
-    default_limits=["60 per minute"]
-)
+API_KEY = os.getenv("API_KEY")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_NAME = os.getenv("DB_NAME", "threatweaver_db")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASS = os.getenv("DB_PASS")
+DB_PORT = os.getenv("DB_PORT", "5432")
 
 # ====================================================
-# HELPERS
+# SECURE JSON UPLOAD ENDPOINT
 # ====================================================
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-# ====================================================
-# SECURE FILE UPLOAD ENDPOINT
-# ====================================================
-
-@app.route('/upload', methods=['POST'])
-@limiter.limit("20 per minute")  # prevent DoS
-def upload_log():
-
-    # ----------------------------
-    # API KEY AUTHENTICATION
-    # ----------------------------
-    client_key = request.headers.get("X-API-KEY")
-
-    if client_key != API_KEY:
+@app.route('/api/upload-logs', methods=['POST'])
+def upload_logs():
+    # 1. Authenticate
+    if request.headers.get("X-API-KEY") != API_KEY:
         abort(401, "Unauthorized")
 
-    # ----------------------------
-    # CHECK FILE EXISTENCE
-    # ----------------------------
-    if 'file' not in request.files:
-        return "No file sent", 400
+    # 2. Get the JSON payload
+    logs = request.get_json()
+    if not logs or not isinstance(logs, list):
+        return jsonify({"error": "Invalid payload format. Expected JSON array."}), 400
 
-    file = request.files['file']
+    # 3. Format data for database insertion
+    values_to_insert = [
+        (
+            log.get("timestamp"), log.get("event_id"), log.get("username"),
+            log.get("source_ip"), log.get("process_name"),
+            log.get("command_line"), log.get("source_machine")
+        )
+        for log in logs
+    ]
 
-    if file.filename == "":
-        return "Empty filename", 400
+    # 4. Insert into PostgreSQL
+    try:
+        conn = psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS, port=DB_PORT)
+        cursor = conn.cursor()
+        
+        insert_query = """
+            INSERT INTO raw_logs (timestamp, event_id, username, source_ip, process_name, command_line, source_machine)
+            VALUES %s
+        """
+        
+        extras.execute_values(cursor, insert_query, values_to_insert)
+        conn.commit()
+        
+        cursor.close()
+        conn.close()
+        
+        print(f"[+] Received and stored {len(logs)} client logs over secure tunnel.")
+        return jsonify({"message": "Logs successfully ingested"}), 200
 
-    # ----------------------------
-    # FILE TYPE VALIDATION
-    # ----------------------------
-    if not allowed_file(file.filename):
-        return "Invalid file type", 400
-
-    # ----------------------------
-    # SECURE FILE NAME
-    # ----------------------------
-    filename = secure_filename(file.filename)
-
-    save_path = os.path.join(UPLOAD_FOLDER, filename)
-
-    file.save(save_path)
-
-    print(f"[+] Received {filename} at {datetime.now()}")
-    return "Upload successful", 200
-
-
-# ====================================================
-# SERVER START
-# ====================================================
+    except Exception as e:
+        print(f"[-] Database Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(
-        host="0.0.0.0",
-        port=8443,
-        ssl_context=(
-            "C:\\https_cert\\cert.pem",
-            "C:\\https_cert\\key.pem"
-        )
-    )
+    cert_path = os.getenv("CERT_PATH", "cert.pem")
+    key_path = os.getenv("KEY_PATH", "key.pem")
+    
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        print(f"🛡️ Secure Log Server starting on HTTPS (Port 5000)...")
+        app.run(host='0.0.0.0', port=5000, ssl_context=(cert_path, key_path))
+    else:
+        print(f"[!] WARNING: SSL Certificates not found. Running in vulnerable HTTP mode.")
+        app.run(host='0.0.0.0', port=5000)
