@@ -6,26 +6,18 @@
   <meta name="description" content="ThreatWeaver SOC Dashboard — SENTINEL Zero Trust Intelligence Engine with real-time threat correlation." />
   <title>ThreatWeaver · SOC Dashboard</title>
 
-  <!-- Google Fonts: Inter + JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 
-  <!-- Font Awesome 6 -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
-
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-
-  <!-- Dashboard styles -->
   <link rel="stylesheet" href="/static/css/dashboard.css" />
 </head>
 <body>
 
-<!-- Animated background canvas -->
 <canvas id="bg-canvas" aria-hidden="true"></canvas>
 
-<!-- ================================================================ SIDEBAR -->
 <nav class="sidebar" id="sidebar" aria-label="Main navigation">
   <div class="sidebar-logo">
     <div class="logo-icon-wrap">
@@ -81,10 +73,8 @@
   </div>
 </nav>
 
-<!-- ================================================================ MAIN -->
 <main class="main-content" role="main">
 
-  <!-- HEADER -->
   <header class="dash-header" role="banner">
     <div class="header-left">
       <div class="header-brand">
@@ -96,8 +86,19 @@
         SENTINEL Zero Trust Intelligence Engine &nbsp;·&nbsp; Real-time threat correlation
       </p>
     </div>
+    
     <div class="header-right">
+      <div class="header-user-badge" title="Authenticated SOC Admin">
+        <img src="{{ session.get('avatar_url', '') }}" alt="Avatar" class="user-avatar" onerror="this.style.display='none';">
+        <span class="user-name">{{ user_name | default('Analyst') }}</span>
+      </div>
+      
+      <a href="/logout" class="btn-logout" title="End Session" aria-label="Logout">
+        <i class="fa-solid fa-power-off"></i>
+      </a>
+      
       <div class="verdict-badge" id="verdict-badge" role="status" aria-live="polite">—</div>
+      
       <button class="btn-refresh" id="btn-refresh" title="Refresh data" aria-label="Refresh dashboard data">
         <i class="fa-solid fa-rotate" aria-hidden="true"></i>
         <span>Refresh</span>
@@ -105,16 +106,14 @@
     </div>
   </header>
 
-  <!-- NO DATA BANNER -->
   <div class="no-data-banner hidden" id="no-data-banner" role="alert">
     <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
-    No analysis data available yet. Run <code>train_isolation_forest_v3.py</code> to generate threat data.
+    No analysis data available yet. Run <code>train_isolation_forest.py</code> to generate threat data.
   </div>
 
-  <!-- ================================================== KPI CARDS -->
   <section id="section-kpi" class="kpi-grid" aria-label="Key Performance Indicators">
 
-    <article class="kpi-card fade-in-up" style="--delay:0.05s" data-tooltip="Total log events ingested">
+    <article class="kpi-card fade-in-up" style="--delay:0.05s" data-tooltip="Total historical log events stored in the database vault">
       <div class="kpi-icon bg-blue">
         <i class="fa-solid fa-database" aria-hidden="true"></i>
       </div>
@@ -136,7 +135,7 @@
       <div class="kpi-trend" aria-hidden="true"><i class="fa-solid fa-arrow-trend-up"></i></div>
     </article>
 
-    <article class="kpi-card fade-in-up" style="--delay:0.15s" data-tooltip="Ratio of anomalous to total events">
+    <article class="kpi-card fade-in-up" style="--delay:0.15s" data-tooltip="Ratio of anomalous events within the active 100k scanning window">
       <div class="kpi-icon bg-red">
         <i class="fa-solid fa-percent" aria-hidden="true"></i>
       </div>
@@ -184,7 +183,6 @@
 
   </section>
 
-  <!-- ================================================== CHARTS -->
   <section id="section-charts" class="charts-grid" aria-label="Analytics Charts">
 
     <div class="chart-card fade-in-up" style="--delay:0.10s">
@@ -237,7 +235,6 @@
 
   </section>
 
-  <!-- ================================================== TIMELINE -->
   <section id="section-timeline" class="section-block fade-in-up" style="--delay:0.10s" aria-label="Event Timeline">
     <h2 class="section-title">
       <i class="fa-solid fa-timeline" aria-hidden="true"></i>
@@ -254,7 +251,6 @@
     </div>
   </section>
 
-  <!-- ================================================== INCIDENTS TABLE -->
   <section id="section-incidents" class="section-block fade-in-up" style="--delay:0.10s" aria-label="Incidents">
     <h2 class="section-title">
       <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
@@ -291,7 +287,6 @@
     </div>
   </section>
 
-  <!-- ================================================== SENTINEL AI -->
   <section id="section-sentinel" class="section-block fade-in-up" style="--delay:0.10s" aria-label="SENTINEL AI Report">
     <h2 class="section-title">
       <i class="fa-solid fa-robot" aria-hidden="true"></i>
@@ -335,10 +330,8 @@
 
 </main>
 
-<!-- Tooltip layer -->
 <div class="tooltip-layer" id="tooltip-layer" role="tooltip" aria-hidden="true"></div>
 
-<!-- Dashboard JS -->
 <script src="/static/js/dashboard.js"></script>
 </body>
 </html>
