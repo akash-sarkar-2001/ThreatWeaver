@@ -1,8 +1,8 @@
 /**
  * ThreatWeaver SOC Dashboard — JavaScript v2
  * Features: Chart.js visualisations · Animated particle canvas ·
- *           Counter animations · Table sort/filter/export ·
- *           Tooltip layer · SENTINEL AI · auto-refresh
+ * Counter animations · Table sort/filter/export ·
+ * Tooltip layer · SENTINEL AI · auto-refresh (Live DB)
  */
 
 'use strict';
@@ -11,7 +11,7 @@
 // Configuration
 // ================================================================
 const CONFIG = {
-  REFRESH_INTERVAL_MS:  30_000,
+  REFRESH_INTERVAL_MS:  30_000, // Auto-refresh every 30 seconds
   COUNTER_DURATION_MS:  1200,
   PARTICLE_COUNT:       55,
   PARTICLE_SPEED_MAX:   0.35,
@@ -53,7 +53,6 @@ const $ = (id) => document.getElementById(id);
   const canvas = $('bg-canvas');
   if (!canvas) return;
 
-  /* Disable if user prefers reduced motion */
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     canvas.style.display = 'none';
     return;
@@ -61,7 +60,6 @@ const $ = (id) => document.getElementById(id);
 
   const ctx  = canvas.getContext('2d');
   let W, H, particles;
-
   const COLORS = ['rgba(0,212,255,', 'rgba(0,255,136,', 'rgba(179,136,255,'];
 
   class Particle {
@@ -133,7 +131,6 @@ const $ = (id) => document.getElementById(id);
   if (!layer) return;
 
   let hideTimer;
-
   document.querySelectorAll('[data-tooltip]').forEach(el => {
     el.addEventListener('mouseenter', (e) => {
       clearTimeout(hideTimer);
@@ -142,9 +139,7 @@ const $ = (id) => document.getElementById(id);
       layer.setAttribute('aria-hidden', 'false');
       positionTooltip(e);
     });
-
     el.addEventListener('mousemove', positionTooltip);
-
     el.addEventListener('mouseleave', () => {
       hideTimer = setTimeout(() => {
         layer.classList.remove('visible');
@@ -157,10 +152,8 @@ const $ = (id) => document.getElementById(id);
     const margin = 12;
     let x = e.clientX + margin;
     let y = e.clientY - layer.offsetHeight - margin;
-    if (x + layer.offsetWidth > window.innerWidth - 8) {
-      x = e.clientX - layer.offsetWidth - margin;
-    }
-    if (y < 8) { y = e.clientY + margin; }
+    if (x + layer.offsetWidth > window.innerWidth - 8) x = e.clientX - layer.offsetWidth - margin;
+    if (y < 8) y = e.clientY + margin;
     layer.style.left = x + 'px';
     layer.style.top  = y + 'px';
   }
@@ -169,26 +162,28 @@ const $ = (id) => document.getElementById(id);
 // ================================================================
 // Utility functions
 // ================================================================
+
+// UPDATED: Now properly formats large numbers with commas
 function animateCounter(el, target, decimals = 0, suffix = '') {
   const duration = CONFIG.COUNTER_DURATION_MS;
   const start    = performance.now();
+  
   function step(now) {
     const progress = Math.min((now - start) / duration, 1);
-    const eased    = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-    el.textContent = (target * eased).toFixed(decimals) + suffix;
+    const eased    = 1 - Math.pow(1 - progress, 3);
+    const currentVal = target * eased;
+    
+    // Format the number with commas (e.g., 1,234,567)
+    const formatted = currentVal.toLocaleString('en-US', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
+    });
+    
+    el.textContent = formatted + suffix;
+    
     if (progress < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
-}
-
-function riskColor(level) {
-  switch ((level || '').toUpperCase()) {
-    case 'CRITICAL': return '#ff3366';
-    case 'HIGH':     return '#ff8c00';
-    case 'MEDIUM':   return '#ffd600';
-    case 'LOW':      return '#00ff88';
-    default:         return '#8a9ab5';
-  }
 }
 
 function escapeHtml(str) {
@@ -256,7 +251,6 @@ function destroyChart(id) {
   if (charts[id]) { charts[id].destroy(); delete charts[id]; }
 }
 
-// Shared scale options
 const darkScales = (showX = true) => ({
   x: showX ? { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5', maxRotation: 30 } } : { display: false },
   y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5' } },
@@ -275,9 +269,12 @@ async function fetchJSON(url) {
 // Render: Summary KPIs
 // ================================================================
 function renderSummary(data) {
+  const noDataBanner = $('no-data-banner');
   if (data.no_data) {
-    $('no-data-banner').classList.remove('hidden');
+    if (noDataBanner) noDataBanner.classList.remove('hidden');
     return;
+  } else {
+    if (noDataBanner) noDataBanner.classList.add('hidden');
   }
 
   setVerdictBadge(data.machine_verdict);
@@ -295,7 +292,6 @@ function renderSummary(data) {
     if (el) animateCounter(el, Number(val) || 0, dec, sfx);
   }
 
-  // Confidence bar
   const confEl  = $('kpi-confidence');
   const confBar = $('confidence-bar');
   const score   = Number(data.confidence_score) || 0;
@@ -314,40 +310,26 @@ function renderSummary(data) {
 function renderRiskChart(data) {
   if (data.no_data) return;
   destroyChart('risk');
-  const ctx = $('chart-risk').getContext('2d');
-
+  const canvas = $('chart-risk');
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
   charts.risk = new Chart(ctx, {
     type: 'doughnut',
     data: {
       labels: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
       datasets: [{
         data: [data.CRITICAL || 0, data.HIGH || 0, data.MEDIUM || 0, data.LOW || 0],
-        backgroundColor: [
-          'rgba(255,51,102,0.85)',
-          'rgba(255,140,0,0.85)',
-          'rgba(255,214,0,0.85)',
-          'rgba(0,255,136,0.85)',
-        ],
-        borderColor:  '#080d1a',
-        borderWidth:  4,
-        hoverOffset:  12,
+        backgroundColor: ['rgba(255,51,102,0.85)', 'rgba(255,140,0,0.85)', 'rgba(255,214,0,0.85)', 'rgba(0,255,136,0.85)'],
+        borderColor:  '#080d1a', borderWidth:  4, hoverOffset:  12,
         hoverBorderColor: ['#ff3366','#ff8c00','#ffd600','#00ff88'],
       }],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: '68%',
+      responsive: true, maintainAspectRatio: false, cutout: '68%',
       plugins: {
-        legend: {
-          position: 'bottom',
-          labels: { padding: 18, boxWidth: 10, color: '#8a9ab5', font: { size: 11 } },
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `  ${ctx.label}: ${ctx.parsed.toLocaleString()}`,
-          },
-        },
+        legend: { position: 'bottom', labels: { padding: 18, boxWidth: 10, color: '#8a9ab5', font: { size: 11 } } },
+        tooltip: { callbacks: { label: (ctx) => `  ${ctx.label}: ${ctx.parsed.toLocaleString()}` } },
       },
       animation: { duration: 1000, easing: 'easeOutQuart' },
     },
@@ -363,31 +345,26 @@ function renderMitreChart(data) {
   const techs  = data.techniques || {};
   const labels = Object.keys(techs).slice(0, 10);
   const values = labels.map(k => techs[k]);
-  const palette = [
-    '#00d4ff','#00ff88','#b388ff','#ff8c00',
-    '#ffd600','#00e5cc','#ff3366','#4dd0e1',
-    '#aed581','#f472b6',
-  ];
+  const palette = ['#00d4ff','#00ff88','#b388ff','#ff8c00','#ffd600','#00e5cc','#ff3366','#4dd0e1','#aed581','#f472b6'];
 
   destroyChart('mitre');
-  const ctx = $('chart-mitre').getContext('2d');
+  const canvas = $('chart-mitre');
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
   charts.mitre = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels,
+      labels: labels.map(l => l.split(' - ')[0]), // Show short ID for clean UI
       datasets: [{
-        label: 'Occurrences',
-        data:  values,
+        label: 'Occurrences', data: values,
         backgroundColor: labels.map((_, i) => palette[i % palette.length] + '28'),
-        borderColor:     labels.map((_, i) => palette[i % palette.length]),
-        borderWidth: 1.5,
-        borderRadius: 5,
+        borderColor: labels.map((_, i) => palette[i % palette.length]),
+        borderWidth: 1.5, borderRadius: 5,
       }],
     },
     options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
         x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5' } },
@@ -406,27 +383,24 @@ function renderUsersChart(data) {
   if (data.no_data) return;
   const users = data.users || [];
   destroyChart('users');
-  const ctx = $('chart-users').getContext('2d');
+  const canvas = $('chart-users');
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
   charts.users = new Chart(ctx, {
     type: 'bar',
     data: {
       labels: users.map(u => u.username || 'N/A'),
       datasets: [{
-        label: 'Max Threat Score',
-        data:  users.map(u => u.max_threat_score),
-        backgroundColor: 'rgba(255,140,0,0.22)',
-        borderColor:     '#ff8c00',
-        borderWidth: 1.5,
-        borderRadius: 5,
-        hoverBackgroundColor: 'rgba(255,140,0,0.38)',
+        label: 'Max Threat Score', data: users.map(u => u.max_threat_score),
+        backgroundColor: 'rgba(255,140,0,0.22)', borderColor: '#ff8c00',
+        borderWidth: 1.5, borderRadius: 5, hoverBackgroundColor: 'rgba(255,140,0,0.38)',
       }],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: darkScales(),
-      animation: { duration: 950, easing: 'easeOutQuart' },
+      scales: darkScales(), animation: { duration: 950, easing: 'easeOutQuart' },
     },
     plugins: [CHART_PLUGIN_NODATA],
   });
@@ -439,27 +413,24 @@ function renderIPChart(data) {
   if (data.no_data) return;
   const ips = data.ips || [];
   destroyChart('ips');
-  const ctx = $('chart-ips').getContext('2d');
+  const canvas = $('chart-ips');
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
   charts.ips = new Chart(ctx, {
     type: 'bar',
     data: {
       labels: ips.map(i => i.ip || 'N/A'),
       datasets: [{
-        label: 'Event Count',
-        data:  ips.map(i => i.count),
-        backgroundColor: 'rgba(0,212,255,0.18)',
-        borderColor:     '#00d4ff',
-        borderWidth: 1.5,
-        borderRadius: 5,
-        hoverBackgroundColor: 'rgba(0,212,255,0.32)',
+        label: 'Event Count', data: ips.map(i => i.count),
+        backgroundColor: 'rgba(0,212,255,0.18)', borderColor: '#00d4ff',
+        borderWidth: 1.5, borderRadius: 5, hoverBackgroundColor: 'rgba(0,212,255,0.32)',
       }],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: darkScales(),
-      animation: { duration: 950, easing: 'easeOutQuart' },
+      scales: darkScales(), animation: { duration: 950, easing: 'easeOutQuart' },
     },
     plugins: [CHART_PLUGIN_NODATA],
   });
@@ -472,43 +443,28 @@ function renderTimeline(data) {
   if (data.no_data) return;
   const tl = data.timeline || [];
   destroyChart('timeline');
-  const ctx = $('chart-timeline').getContext('2d');
+  const canvas = $('chart-timeline');
+  if (!canvas) return;
 
+  const ctx = canvas.getContext('2d');
   charts.timeline = new Chart(ctx, {
     type: 'line',
     data: {
       labels: tl.map(t => t.hour),
-      datasets: [
-        {
-          label: 'Events',
-          data:  tl.map(t => t.count),
-          borderColor:     '#00d4ff',
-          backgroundColor: CHART_GRADIENT_CYAN(ctx),
-          fill:       true,
-          tension:    0.42,
-          pointRadius: 4,
-          pointHoverRadius: 7,
-          pointBackgroundColor: '#00d4ff',
-          pointBorderColor:     '#080d1a',
-          pointBorderWidth:     2,
-          borderWidth: 2,
-        },
-      ],
+      datasets: [{
+        label: 'Events', data: tl.map(t => t.count),
+        borderColor: '#00d4ff', backgroundColor: CHART_GRADIENT_CYAN(ctx),
+        fill: true, tension: 0.42, pointRadius: 4, pointHoverRadius: 7,
+        pointBackgroundColor: '#00d4ff', pointBorderColor: '#080d1a', pointBorderWidth: 2, borderWidth: 2,
+      }],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: { legend: { display: false } },
       scales: {
-        x: {
-          grid: { color: 'rgba(255,255,255,0.04)' },
-          ticks: { color: '#8a9ab5', maxTicksLimit: 14, maxRotation: 30 },
-        },
-        y: {
-          grid: { color: 'rgba(255,255,255,0.04)' },
-          ticks: { color: '#8a9ab5' },
-        },
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5', maxTicksLimit: 14, maxRotation: 30 } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#8a9ab5' } },
       },
       animation: { duration: 1000, easing: 'easeOutQuart' },
     },
@@ -539,7 +495,7 @@ function drawTable(rows) {
     <tr>
       <td>${escapeHtml(r.username || '—')}</td>
       <td><code>${escapeHtml(r.source_ip || '—')}</code></td>
-      <td><span class="risk-badge risk-${escapeHtml(r.risk_level || '')}">${escapeHtml(r.risk_level || '—')}</span></td>
+      <td><span class="risk-badge risk-${escapeHtml((r.risk_level || '').toLowerCase())}">${escapeHtml(r.risk_level || '—')}</span></td>
       <td>${Number(r.threat_score || 0).toFixed(0)}</td>
       <td>${formatMitrePills(r.mitre_techniques)}</td>
     </tr>
@@ -551,75 +507,57 @@ function updateTableCount(n) {
   if (el) el.textContent = `${n.toLocaleString()} incident${n !== 1 ? 's' : ''}`;
 }
 
-// Table search
 function initTableSearch() {
   const input = $('table-search');
   if (!input) return;
   input.addEventListener('input', () => {
-    const q        = input.value.toLowerCase();
+    const q = input.value.toLowerCase();
     const filtered = incidentsData.filter(r =>
-      (r.username        || '').toLowerCase().includes(q) ||
-      (r.source_ip       || '').toLowerCase().includes(q) ||
-      (r.risk_level      || '').toLowerCase().includes(q) ||
-      (r.mitre_techniques|| '').toLowerCase().includes(q)
+      (r.username || '').toLowerCase().includes(q) ||
+      (r.source_ip || '').toLowerCase().includes(q) ||
+      (r.risk_level || '').toLowerCase().includes(q) ||
+      (r.mitre_techniques || '').toLowerCase().includes(q)
     );
     updateTableCount(filtered.length);
     drawTable(filtered);
   });
 }
 
-// Table column sort
 function initTableSort() {
   const table = $('incidents-table');
   if (!table) return;
-
   table.querySelectorAll('thead th[data-sort]').forEach(th => {
     th.addEventListener('click', () => {
       const col = th.dataset.sort;
-
-      // Reset all headers
-      table.querySelectorAll('thead th').forEach(h => {
-        h.classList.remove('sorted-asc', 'sorted-desc');
-      });
+      table.querySelectorAll('thead th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
 
       if (sortState.col === col) {
         sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
       } else {
-        sortState.col = col;
-        sortState.dir = 'desc';
+        sortState.col = col; sortState.dir = 'desc';
       }
 
       th.classList.add(`sorted-${sortState.dir}`);
-
       const sorted = [...incidentsData].sort((a, b) => {
         let av = a[col] ?? '', bv = b[col] ?? '';
-        if (!isNaN(Number(av)) && !isNaN(Number(bv))) {
-          av = Number(av); bv = Number(bv);
-        } else {
-          av = String(av).toLowerCase();
-          bv = String(bv).toLowerCase();
-        }
+        if (!isNaN(Number(av)) && !isNaN(Number(bv))) { av = Number(av); bv = Number(bv); }
+        else { av = String(av).toLowerCase(); bv = String(bv).toLowerCase(); }
         if (av < bv) return sortState.dir === 'asc' ? -1 :  1;
         if (av > bv) return sortState.dir === 'asc' ?  1 : -1;
         return 0;
       });
-
       drawTable(sorted);
     });
   });
 }
 
-// CSV Export
 function initExport() {
   const btn = $('btn-export');
   if (!btn) return;
   btn.addEventListener('click', () => {
     if (!incidentsData.length) return;
-
     const header = ['username', 'source_ip', 'risk_level', 'threat_score', 'mitre_techniques'];
-    const rows   = incidentsData.map(r =>
-      header.map(k => JSON.stringify(r[k] ?? '')).join(',')
-    );
+    const rows   = incidentsData.map(r => header.map(k => JSON.stringify(r[k] ?? '')).join(','));
     const csv  = [header.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a    = document.createElement('a');
@@ -643,64 +581,48 @@ function initSentinel() {
     const toolbar = $('sentinel-toolbar');
 
     btn.disabled = true;
-    loading.classList.remove('hidden');
-    output.classList.add('hidden');
-    output.innerHTML = '';
-    toolbar.classList.add('hidden');
+    if (loading) loading.classList.remove('hidden');
+    if (output) { output.classList.add('hidden'); output.innerHTML = ''; }
+    if (toolbar) toolbar.classList.add('hidden');
 
     try {
       const data = await fetchJSON('/api/sentinel-report');
-      loading.classList.add('hidden');
+      if (loading) loading.classList.add('hidden');
 
       if (data.error) {
-        output.innerHTML = `
-          <div class="sentinel-error">
-            <i class="fa-solid fa-circle-exclamation"></i>
-            ${escapeHtml(data.error)}
-          </div>`;
+        if (output) output.innerHTML = `<div class="sentinel-error"><i class="fa-solid fa-circle-exclamation"></i> ${escapeHtml(data.error)}</div>`;
       } else {
-        output.innerHTML = renderMarkdown(data.report || '');
-        // Show toolbar with timestamp
+        if (output) output.innerHTML = renderMarkdown(data.report || '');
         const ts = $('sentinel-generated-ts');
         if (ts) ts.textContent = 'Generated ' + new Date().toLocaleString();
-        toolbar.classList.remove('hidden');
+        if (toolbar) toolbar.classList.remove('hidden');
       }
 
-      output.classList.remove('hidden');
-      fadeIn(output);
+      if (output) { output.classList.remove('hidden'); fadeIn(output); }
     } catch (err) {
-      loading.classList.add('hidden');
-      output.innerHTML = `
-        <div class="sentinel-error">
-          <i class="fa-solid fa-circle-exclamation"></i>
-          ${escapeHtml(err.message)}
-        </div>`;
-      output.classList.remove('hidden');
+      if (loading) loading.classList.add('hidden');
+      if (output) {
+        output.innerHTML = `<div class="sentinel-error"><i class="fa-solid fa-circle-exclamation"></i> Failed to connect to AI engine: ${escapeHtml(err.message)}</div>`;
+        output.classList.remove('hidden');
+      }
     } finally {
       btn.disabled = false;
     }
   });
 }
 
-/** Lightweight markdown → HTML (h1-h3, bold, italic, hr) */
 function renderMarkdown(text) {
   return text
-    // Escape HTML first
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Headings
     .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^### (.+)$/gm,  '<h3>$1</h3>')
     .replace(/^## (.+)$/gm,   '<h2 style="color:var(--text-primary);margin:16px 0 8px;">$2</h2>')
-    // Bold / italic
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g,     '<em>$1</em>')
-    // Horizontal rule
     .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">')
-    // Line breaks
     .replace(/\n/g, '<br>');
 }
 
-/** Smooth fade-in */
 function fadeIn(el, duration = 450) {
   el.style.opacity = '0';
   const start = performance.now();
@@ -713,10 +635,9 @@ function fadeIn(el, duration = 450) {
 }
 
 // ================================================================
-// Navigation
+// Navigation & Print
 // ================================================================
 function initNav() {
-  // Smooth scroll
   document.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
@@ -725,7 +646,6 @@ function initNav() {
     });
   });
 
-  // Intersection observer → active link
   const sections = document.querySelectorAll('section[id]');
   const observer = new IntersectionObserver(entries => {
     for (const entry of entries) {
@@ -735,20 +655,13 @@ function initNav() {
           l.removeAttribute('aria-current');
         });
         const link = document.querySelector(`.nav-link[href="#${entry.target.id}"]`);
-        if (link) {
-          link.classList.add('active');
-          link.setAttribute('aria-current', 'page');
-        }
+        if (link) { link.classList.add('active'); link.setAttribute('aria-current', 'page'); }
       }
     }
   }, { threshold: 0.3, rootMargin: '-60px 0px -60px 0px' });
-
   sections.forEach(s => observer.observe(s));
 }
 
-// ================================================================
-// Refresh button
-// ================================================================
 function initRefreshButton() {
   const btn = $('btn-refresh');
   if (!btn) return;
@@ -758,29 +671,18 @@ function initRefreshButton() {
   });
 }
 
-// ================================================================
-// Print Report
-// ================================================================
 function initPrintReport() {
   const btn = $('btn-print-report');
   if (!btn) return;
-
   btn.addEventListener('click', () => {
     const output = $('sentinel-output');
     if (!output || output.classList.contains('hidden')) return;
-
-    // Inject a print-only branded header (hidden on screen via CSS)
     const tsText = $('sentinel-generated-ts')?.textContent || '';
     const header = document.createElement('div');
     header.className = 'print-report-header';
-    header.innerHTML =
-      '<h1>&#x1F6E1;&#xFE0F; ThreatWeaver &mdash; SENTINEL AI Threat Intelligence Report</h1>' +
-      '<p>' + escapeHtml(tsText) + ' &nbsp;&middot;&nbsp; Confidential &mdash; For SOC Internal Use Only</p>';
+    header.innerHTML = '<h1>&#x1F6E1;&#xFE0F; ThreatWeaver &mdash; SENTINEL AI Threat Intelligence Report</h1><p>' + escapeHtml(tsText) + ' &nbsp;&middot;&nbsp; Confidential &mdash; For SOC Internal Use Only</p>';
     output.prepend(header);
-
     window.print();
-
-    // Remove injected header after print dialog closes so screen view is clean
     header.remove();
   });
 }
@@ -824,8 +726,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initExport();
   initSentinel();
   initPrintReport();
+  
+  // Initial load
   loadAll();
 
-  // Auto-refresh
+  // Auto-refresh using Live DB
   setInterval(loadAll, CONFIG.REFRESH_INTERVAL_MS);
 });
