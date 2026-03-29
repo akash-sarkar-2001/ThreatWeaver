@@ -9,3 +9,4 @@ psycopg2-binary>=2.9.0
 python-dotenv>=1.0.0
 Authlib>=1.0.0
 pywin32>=300; sys_platform == 'win32'
+urllib3>=1.26.0
