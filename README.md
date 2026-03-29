@@ -1,112 +1,249 @@
-# ThreatWeaver
-An advanced AI-powered log analysis and threat detection system using Isolation Forest and MITRE ATT&CK mappings.
+<div align="center">
 
-## Key Capabilities
-- **Unsupervised Anomaly Detection:** Uses an Isolation Forest algorithm to baseline "normal" behavior and flag anomalies.
-- **Rule-Based Heuristics:** Employs multiple deterministic rules tailored to catch lateral movement, privilege escalation, and specific command executions.
-- **Correlated Scoring:** Combines Machine Learning confidence and rule hits into an overall incident risk score.
-- **AI Triage Integration (Optional):** Sends summarized high-confidence events to an Ollama LLM for automated Tier-1 analysis.
-- **Database Driven:** Built on top of robust PostgreSQL storage.
-- **Zero Trust Dashboard:** Features GitHub OAuth authentication for secured insights.
+# 🕸️ ThreatWeaver
 
-## Repository Structure
-- `train_isolation_forest.py`: The main engine. Connects to PostgreSQL, loads events, applies ML and rules, scores risks, maps to MITRE ATT&CK, and pushes analyzed logs back.
-- `dashboard.py`: A Flask-based web application showing metrics and insights, protected by GitHub OAuth.
-- `secure_log_server.py`: A REST API endpoint built with Flask to receive logs over an encrypted tunnel.
-- `server-log.py`: Collects Domain Controller logs (Event IDs: 4624, 4625, 4672, 4768, 4769, 4688) and pushes directly to PostgreSQL.
-- `client-log.py`: Collects Client logs and pushes them to `secure_log_server.py`.
-- `testollama.py`: Prepares high-confidence incident context and submits it to an Ollama LLM (like Qwen2.5) for automated threat reports.
-- `attack.sh`: A simple bash script to simulate rapid login failures (for testing purposes).
-- `generate_cert.py`: A helper script for creating temporary SSL certificates.
+**AI-Powered SOC Platform for Active Directory Threat Detection**
 
-## Quick Start
+Isolation Forest ML · Rule-Based Detection · MITRE ATT&CK Mapping · LLM Threat Intelligence
 
-### 1) Prerequisites
-1. Python 3.9+
-2. A running PostgreSQL Server.
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+[![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/Flask-Web_Dashboard-000000?logo=flask)](https://flask.palletsprojects.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License](https://img.shields.io/badge/License-Research_Use-orange)](#disclaimer)
 
-### 2) Database Setup
-ThreatWeaver now relies on PostgreSQL. You must have a database created (e.g., `threatweaver_db`). Provide the necessary connection variables via `.env` configuration.
+</div>
 
-Create a `.env` file in the root directory:
+---
+
+## 🔍 What is ThreatWeaver?
+
+ThreatWeaver is an end-to-end threat detection platform built for Windows Active Directory environments. It collects security event logs from Domain Controllers and client machines, runs them through a multi-layered detection engine combining **unsupervised machine learning** and **deterministic rule-based heuristics**, and presents the results on a real-time SOC dashboard — complete with optional **AI-generated threat intelligence reports** powered by a local LLM.
+
+---
+
+## ⚙️ Architecture Overview
+
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│  Domain Controller  │     │    Client Machine     │
+│   (server-log.py)   │     │   (client-log.py)     │
+│                     │     │                       │
+│  Reads Event IDs:   │     │  Reads Event IDs:     │
+│  4624, 4625, 4672,  │     │  4624, 4625, 4688     │
+│  4768, 4769, 4688   │     │                       │
+└────────┬────────────┘     └───────────┬───────────┘
+         │  Direct DB Insert                │  HTTPS + API Key
+         │                                  ▼
+         │                    ┌──────────────────────────┐
+         │                    │  secure_log_server.py     │
+         │                    │  (Flask REST API on :5000)│
+         │                    └────────────┬─────────────┘
+         │                                 │
+         ▼                                 ▼
+┌──────────────────────────────────────────────────────┐
+│              PostgreSQL (raw_logs table)              │
+│                   TimescaleDB Hypertable              │
+└────────────────────────┬─────────────────────────────┘
+                         │
+                         ▼
+          ┌──────────────────────────────┐
+          │   train_isolation_forest.py   │
+          │   (ML + Rules Detection)      │
+          │                              │
+          │  • Isolation Forest Model    │
+          │  • 9 Detection Rules         │
+          │  • MITRE ATT&CK Mapping      │
+          │  • Confidence Scoring        │
+          └──────────────┬───────────────┘
+                         │
+                         ▼
+          ┌──────────────────────────────┐
+          │   PostgreSQL (analyzed_logs)  │
+          └──────┬───────────────┬───────┘
+                 │               │
+                 ▼               ▼
+     ┌───────────────┐  ┌──────────────────┐
+     │ dashboard.py   │  │  testollama.py    │
+     │ (SOC Dashboard │  │  (SENTINEL AI     │
+     │  on :5001)     │  │   Threat Reports) │
+     │ GitHub OAuth   │  │  Ollama + Qwen2.5 │
+     └───────────────┘  └──────────────────┘
+```
+
+---
+
+## 🛡️ Detection Capabilities
+
+### Machine Learning Layer
+The **Isolation Forest** algorithm trains on behavioral features (login times, event frequencies, IP distributions) to establish a baseline of "normal" and flag statistical outliers as anomalies.
+
+### Rule-Based Detection Layer (9 Rules)
+
+| Rule | Detection Logic | MITRE ATT&CK |
+|---|---|---|
+| **Brute Force** | High failed logins from multiple IPs or within 10-min window | T1110 |
+| **Password Spray** | Single IP failing against ≥6 unique users | T1110.003 |
+| **Credential Stuffing** | Success login after ≥5 prior failures | T1110.004 |
+| **Account Enumeration** | Single IP probing ≥12 unique accounts | T1087.002 |
+| **Privilege Escalation** | Successful login + privilege assignment after failures | T1078 |
+| **Lateral Movement** | Single user authenticating across ≥2 machines | T1021 |
+| **Suspicious Process/Cmd** | Execution of known offensive tools (Mimikatz, PsExec, etc.) | T1059 |
+| **Kerberoasting** | Abnormal volume of TGS ticket requests per user | T1558.003 |
+| **After-Hours Privileged** | Privileged access outside 06:00–20:00 window | T1078.002 |
+
+### Scoring System
+Each event receives a weighted **rule score** + an **ML score** (if flagged as anomaly). The combined **total threat score** translates to risk levels:
+
+| Score | Risk Level |
+|---|---|
+| ≥ 9 | 🔴 CRITICAL |
+| 6 – 8 | 🟠 HIGH |
+| 3 – 5 | 🟡 MEDIUM |
+| 0 – 2 | 🟢 LOW |
+
+---
+
+## 📁 Repository Structure
+
+| File | Purpose |
+|---|---|
+| `train_isolation_forest.py` | Core detection engine — loads raw logs, runs Isolation Forest + 9 rules, maps MITRE ATT&CK techniques, scores risks, writes results to `analyzed_logs` table. Runs on a 60-second loop. |
+| `dashboard.py` | Flask web dashboard (port 5001) — serves REST APIs for summary stats, risk distributions, top incidents, MITRE technique breakdowns, timeline data, user/IP analysis, and SENTINEL AI reports. Protected by GitHub OAuth. |
+| `testollama.py` | SENTINEL AI threat intelligence engine — aggregates metrics from both DB tables, builds a structured prompt, queries Ollama LLM, validates output against allowed MITRE techniques, and sanitizes the final report. Includes prompt injection defenses. |
+| `server-log.py` | Domain Controller log collector — reads Windows Security Event Log (Event IDs 4624/4625/4672/4768/4769/4688), inserts directly into PostgreSQL. Uses a watermark file for incremental collection. |
+| `client-log.py` | Client machine log collector — reads local Windows Security events (4624/4625/4688), forwards them over HTTPS to `secure_log_server.py` with API key authentication. |
+| `secure_log_server.py` | Flask REST API (port 5000) — receives JSON log payloads from client agents over TLS, authenticates via `X-API-KEY` header, and inserts into PostgreSQL. |
+| `generate_cert.py` | Generates self-signed SSL certificates (RSA 4096-bit, SHA-256) with SAN for server IP, 127.0.0.1, and localhost. |
+| `attack.sh` | Bash attack simulator (designed for Termux) — cycles through 10 AD attack patterns (brute force, password spray, credential stuffing, lateral movement, Kerberoasting prep, etc.) against a target DC using `smbclient`. |
+| `templates/dashboard.html` | Main SOC dashboard UI template with charts and incident tables. |
+| `templates/login.html` | GitHub OAuth login page. |
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Python 3.9+**
+- **PostgreSQL** with [TimescaleDB](https://www.timescale.com/) extension
+- **Windows** machines for log collection (uses `pywin32` for the Windows Event Log API)
+- **(Optional)** [Ollama](https://ollama.com/) with a model like `qwen2.5:3b` for AI-generated threat reports
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configure Environment
+
+Create a `.env` file in the project root:
+
 ```ini
+# Database
 DB_HOST=localhost
 DB_NAME=threatweaver_db
 DB_USER=postgres
 DB_PASS=your_db_password
 DB_PORT=5432
 
-# Client/Server log forwarding
+# Client-to-Server log forwarding
 API_KEY=your_secure_api_key
 SERVER_URL=https://<your_server_ip>:5000/api/upload-logs
 
-# GitHub OAuth credentials for dashboard
+# GitHub OAuth (for SOC Dashboard)
 SECRET_KEY=your_flask_secret_key
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
 
-# AI Triage
+# SSL certificate generation
+CERT_DIR=.
+SERVER_IP=your_server_ip
+
+# AI Threat Reports (optional)
 OLLAMA_URL=http://localhost:11434/api/generate
 OLLAMA_MODEL=qwen2.5:3b
 ```
 
-### 3) Start Log Forwarding
-If you are testing on Windows machines:
+### 3. Generate SSL Certificates
 
-**On the Server / Domain Controller:**
+```bash
+python generate_cert.py
+```
+
+### 4. Set Up Database
+
+Ensure your PostgreSQL instance has TimescaleDB enabled. The `raw_logs` hypertable is created automatically when `server-log.py` runs for the first time.
+
+### 5. Start Log Collection
+
+**On the Domain Controller:**
 ```bash
 python server-log.py
 ```
-This reads security event logs and inserts them directly into PostgreSQL.
 
-**On the Client Machine:**
-Start the secure log server API on your main server first:
+**On each Client Machine** — first start the secure log receiver on the server:
 ```bash
 python secure_log_server.py
 ```
-Then on the client machine:
+Then on the client:
 ```bash
 python client-log.py
 ```
-This reads client security logs and posts them to your secure log server endpoint.
 
-### 4) Run the Detection Pipeline
-Run the analysis engine. This script continuously analyzes new raw logs from the database, runs the Isolation Forest model, scores the events, and saves the output back to an `analyzed_logs` database table.
+### 6. Run the Detection Engine
+
 ```bash
 python train_isolation_forest.py
 ```
+This continuously analyzes new raw logs every 60 seconds and writes scored results to the `analyzed_logs` table.
 
-### 5) Launch the SOC Dashboard
-Start the Flask web dashboard:
+### 7. Launch the SOC Dashboard
+
 ```bash
 python dashboard.py
 ```
-Navigate to `http://localhost:5000`. You will be prompted to log in using your authorized GitHub account.
+Open `https://localhost:5001` — you'll be prompted to authenticate via GitHub OAuth. Only whitelisted admin emails (configured in `dashboard.py`) can access the dashboard.
 
-### 6) Generate AI Threat Report (Optional)
-If you have an Ollama model running, you can run the LLM threat report engine:
+### 8. Generate AI Threat Reports (Optional)
+
+With Ollama running locally:
 ```bash
 python testollama.py
 ```
-This will fetch the latest summarized metrics and incidents, and generate an executive threat intelligence report.
+Or click the **SENTINEL AI** button on the dashboard to generate reports in-browser.
 
-## Detection Layers
-The engine (`train_isolation_forest.py`) uses a stacked approach:
-1. **Unsupervised Baseline:** Isolation Forest identifies anomalous combinations of features (time, frequency, event ID distribution).
-2. **Behavioral Flags:** Tracks variables over time (e.g., failed logins per 10 minutes, unique IPs).
-3. **Deterministic Rules:** Detects specific conditions like:
-    - **Brute Force:** High rate of failures from single or multiple IPs.
-    - **Password Spray:** Failed logins targeting many users from the same IP.
-    - **Credential Stuffing:** High failure count followed by success.
-    - **Kerberoasting:** Abnormal volume of TGS requests.
-    - **Lateral Movement:** Successes on multiple separate machines.
+---
 
-### Risk Scoring
-Each incident receives a `rule_score` based on the rule hits and an `ml_score` if flagged by the Isolation Forest. The sum represents the `total_threat_score`, which is translated into `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL` risk levels.
+## 🧪 Attack Simulation
 
-## Important Note
-This application is designed for Lab and Research environments. Using it in production requires ensuring correct database hardening, managing the performance of the Python models on larger datasets, and properly securing API keys and OAuth secrets.
+Use `attack.sh` from a Linux/Termux machine to simulate common AD attacks against your lab Domain Controller:
+
+```bash
+chmod +x attack.sh
+./attack.sh
+```
+
+This runs 10 attack patterns in 30-second cycles: brute force, password spraying, credential stuffing, success-after-failure, privileged logon, lateral movement, SMB recon, account enumeration, Kerberoasting prep, and off-hours access.
+
+---
+
+## 🔐 Security Features
+
+- **GitHub OAuth** — Zero-trust access control for the SOC dashboard with email-based admin whitelist
+- **API Key Authentication** — Header-based auth (`X-API-KEY`) for the log ingestion endpoint
+- **TLS Encryption** — Self-signed certificates for both the log server and dashboard
+- **Prompt Injection Protection** — Input sanitization, output validation, and hard enforcement sanitization for LLM-generated reports
+- **Incremental Log Collection** — Watermark-based tracking prevents duplicate log ingestion
+
+---
+
+## ⚠️ Disclaimer
+
+This project is built for **lab, research, and educational environments**. Before using in production:
+
+- Harden your PostgreSQL instance and rotate credentials
+- Replace self-signed certificates with CA-signed ones
+- Secure the `.env` file and restrict filesystem permissions
+- Test ML model performance on larger datasets
+- Update the `AUTHORIZED_ADMINS` list in `dashboard.py` with your own email
