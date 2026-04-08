@@ -155,10 +155,13 @@ SERVER_URL=https://<your_server_ip>:5000/api/upload-logs
 SECRET_KEY=your_flask_secret_key
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
+AUTHORIZED_ADMINS=your_email_id
 
 # SSL certificate generation
 CERT_DIR=.
 SERVER_IP=your_server_ip
+CERT_PATH = "Path_of_cert.pem"
+KEY_PATH = "Path_of_key.pem"
 
 # AI Threat Reports (optional)
 OLLAMA_URL=http://localhost:11434/api/generate
