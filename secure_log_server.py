@@ -3,6 +3,8 @@ import psycopg2
 from psycopg2 import extras
 import os
 import dotenv
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 dotenv.load_dotenv()
 
@@ -18,10 +20,21 @@ DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASS = os.getenv("DB_PASS")
 DB_PORT = os.getenv("DB_PORT", "5432")
 
+# Limit maximum payload size to 2 Megabytes
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 
+
+# Setup rate limiter
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["1000 per day", "200 per hour"]
+)
+
 # ====================================================
 # SECURE JSON UPLOAD ENDPOINT
 # ====================================================
 @app.route('/api/upload-logs', methods=['POST'])
+@limiter.limit("20 per minute") # Restrict bursts
 def upload_logs():
     # 1. Authenticate
     if request.headers.get("X-API-KEY") != API_KEY:
