@@ -21,7 +21,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.secret_key = os.getenv("SECRET_KEY")
 
 # IMPORTANT: Update this list with your actual GitHub email!
-AUTHORIZED_ADMINS = ["i.am.akash.sarkar.2001@gmail.com"]
+admin_env = os.getenv("AUTHORIZED_ADMINS", "")
+AUTHORIZED_ADMINS = [email.strip() for email in admin_env.split(",") if email.strip()]
+
+if not AUTHORIZED_ADMINS:
+    print("[WARNING] No authorized admins configured in .env!")
 
 oauth = OAuth(app)
 github = oauth.register(
