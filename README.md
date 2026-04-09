@@ -250,3 +250,10 @@ This project is built for **lab, research, and educational environments**. Befor
 - Secure the `.env` file and restrict filesystem permissions
 - Test ML model performance on larger datasets
 - Update the `AUTHORIZED_ADMINS` list in `dashboard.py` with your own email
+
+## ⚖️ License
+
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details. This license provides a grant of patent rights and allows for both personal and commercial use while requiring preservation of copyright and license notices.
+
+---
+*Built with ❤️ for secure Active Directory environments.*
