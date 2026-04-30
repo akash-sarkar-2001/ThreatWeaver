@@ -4,7 +4,7 @@
 
 **AI-Powered SOC Platform for Active Directory Threat Detection**
 
-Isolation Forest ML · Rule-Based Detection · MITRE ATT&CK Mapping · RAG-Augmented LLM Threat Intelligence
+Isolation Forest ML · Rule-Based Detection · MITRE ATT&CK Mapping · RAG-Augmented LLM Threat Intelligence · Live Presentation Mode
 
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-Web_Dashboard-000000?logo=flask)](https://flask.palletsprojects.com/)
@@ -82,6 +82,13 @@ ThreatWeaver is an end-to-end threat detection platform built for Windows Active
 │  Ingests SOC runbooks (runbooks/*.md) into   │
 │  ChromaDB vector store for RAG retrieval     │
 └──────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────┐
+│  Presentation Mode (Watermark System)        │
+│  presentation_watermark table in PostgreSQL  │
+│  Filters dashboard, ML, and AI to show       │
+│  only post-watermark data for live demos     │
+└──────────────────────────────────────────────┘
 ```
 
 ---
@@ -99,6 +106,33 @@ ThreatWeaver implements a **Retrieval-Augmented Generation (RAG)** pipeline to g
 3. **Augment** — The retrieved context is injected into the LLM prompt under an `INTERNAL RUNBOOK CONTEXT` section. The LLM is explicitly instructed to base its `PRIORITY RESPONSE ACTIONS` and `ZERO TRUST HARDENING RECOMMENDATIONS` on the provided runbook content.
 
 This ensures that generated recommendations are **specific to your environment** rather than generic security advice.
+
+---
+
+## 🎯 Presentation Mode
+
+ThreatWeaver includes a **Presentation Mode** designed for live demonstrations. It allows you to show a clean dashboard to your audience, then run a simulated attack and watch the detections appear in real-time — all without deleting any historical data.
+
+### How It Works
+
+Presentation Mode uses a **database watermark** — a timestamp stored in a single-row PostgreSQL table (`presentation_watermark`). When activated, every component in the pipeline filters its queries to only return data generated **after** the watermark:
+
+| Component | Behavior When Active |
+|---|---|
+| `dashboard.py` | All API endpoints return only post-watermark analyzed data |
+| `train_isolation_forest.py` | ML model trains exclusively on post-watermark raw logs |
+| `testollama.py` | SENTINEL AI generates reports from post-watermark data only |
+| Dashboard UI | Polls every **10 seconds** (vs. 30s normally) for near-real-time updates |
+
+### Demo Workflow
+
+1. **Toggle ON** — Click the **Presentation Mode** button in the dashboard header. The watermark is set to `NOW()`, all caches are invalidated, and the dashboard shows a clean zero state.
+2. **Simulate Attack** — Run `attack.sh` from a Linux/Termux machine. The generated Windows Security events flow through the log collectors into the database.
+3. **Watch Detections** — Within 60 seconds, `train_isolation_forest.py` picks up the new logs, trains the Isolation Forest on post-watermark data, and writes results to `analyzed_logs`. The dashboard auto-refreshes every 10 seconds to display live KPIs, charts, and incidents.
+4. **Generate Report** — Click **Generate SENTINEL Report** to produce an AI threat intelligence report based solely on the demo attack data.
+5. **Restore** — Click **Restore Full History** (in the amber banner) or toggle the button again to deactivate the watermark and return to the full historical view.
+
+Historical logs are never deleted — the watermark is purely a temporal filter.
 
 ---
 
@@ -137,9 +171,9 @@ Each event receives a weighted **rule score** + an **ML score** (if flagged as a
 
 | File | Purpose |
 |---|---|
-| `train_isolation_forest.py` | Core detection engine — loads raw logs (up to 100K events in memory-safe batches), runs Isolation Forest + 9 rules, maps MITRE ATT&CK techniques, scores risks, writes results to `analyzed_logs` table. Runs on a 60-second loop. |
-| `dashboard.py` | Flask web dashboard (port 5001) — serves REST APIs for summary stats, risk distributions, top incidents, MITRE technique breakdowns, timeline data, user/IP analysis, and SENTINEL AI reports. Protected by GitHub OAuth. Includes in-memory caching with configurable TTL. |
-| `testollama.py` | SENTINEL AI threat intelligence engine — aggregates metrics from both DB tables, retrieves relevant context from the ChromaDB vector store via RAG, builds a structured prompt, queries Ollama LLM, validates output against allowed MITRE techniques, and sanitizes the final report. Includes prompt injection defenses and an in-memory cache. |
+| `train_isolation_forest.py` | Core detection engine — loads raw logs (up to 100K events in memory-safe batches), runs Isolation Forest + 9 rules, maps MITRE ATT&CK techniques, scores risks, writes results to `analyzed_logs` table. Runs on a 60-second loop. Respects the Presentation Mode watermark when active. |
+| `dashboard.py` | Flask web dashboard (port 5001) — serves REST APIs for summary stats, risk distributions, top incidents, MITRE technique breakdowns, timeline data, user/IP analysis, SENTINEL AI reports, and Presentation Mode watermark management. Protected by GitHub OAuth. Includes in-memory caching with configurable TTL. |
+| `testollama.py` | SENTINEL AI threat intelligence engine — aggregates metrics from both DB tables, retrieves relevant context from the ChromaDB vector store via RAG, builds a structured prompt, queries Ollama LLM, validates output against allowed MITRE techniques, and sanitizes the final report. Includes prompt injection defenses, an in-memory cache, and Presentation Mode watermark awareness. |
 | `ingest_intel.py` | RAG ingestion script — loads SOC runbooks and threat intel documents from `runbooks/`, splits them into chunks, embeds them with `all-MiniLM-L6-v2`, and stores the vectors in a local ChromaDB database (`chroma_db/`). |
 | `server-log.py` | Domain Controller log collector — reads Windows Security Event Log (Event IDs 4624/4625/4672/4768/4769/4688), inserts directly into PostgreSQL. Uses a watermark file for incremental collection. |
 | `client-log.py` | Client machine log collector — reads local Windows Security events (4624/4625/4688), forwards them over HTTPS to `secure_log_server.py` with API key authentication. Sends logs in chunks of 2,000 to stay within the server's 2MB payload limit. Uses a persistent watermark file for incremental collection across restarts. |
@@ -148,8 +182,10 @@ Each event receives a weighted **rule score** + an **ML score** (if flagged as a
 | `attack.sh` | Bash attack simulator (designed for Termux) — cycles through 10 AD attack patterns (brute force, password spray, credential stuffing, lateral movement, Kerberoasting prep, etc.) against a target DC using `smbclient`. |
 | `runbooks/` | Directory containing SOC runbook Markdown files that are ingested into the RAG vector store by `ingest_intel.py`. Add your own `.md` playbooks here to customize SENTINEL AI recommendations. |
 | `chroma_db/` | Local ChromaDB vector database (auto-generated by `ingest_intel.py`). Stores embedded runbook chunks for RAG retrieval. |
-| `templates/dashboard.html` | Main SOC dashboard UI template with charts and incident tables. |
+| `templates/dashboard.html` | Main SOC dashboard UI template with charts, incident tables, and Presentation Mode controls. |
 | `templates/login.html` | GitHub OAuth login page. |
+| `static/js/dashboard.js` | Dashboard frontend logic — Chart.js visualizations, table sort/filter/export, SENTINEL AI integration, particle canvas, and Presentation Mode state management with dynamic polling. |
+| `static/css/dashboard.css` | Premium dark-theme styling — glassmorphism, neon accents, responsive layout, and Presentation Mode button/banner animations. |
 
 ---
 
@@ -283,6 +319,7 @@ This runs 10 attack patterns in 30-second cycles: brute force, password spraying
 - **Prompt Injection Protection** — Input sanitization, output validation, and hard enforcement sanitization for LLM-generated reports
 - **Incremental Log Collection** — Persistent watermark file tracking prevents duplicate log ingestion across restarts
 - **RAG Grounding** — LLM recommendations are anchored to your own SOC runbooks via retrieval-augmented generation, reducing hallucination
+- **Presentation Mode** — Non-destructive database watermark system that filters all views to post-watermark data for clean live demonstrations without deleting historical logs
 
 ---
 
