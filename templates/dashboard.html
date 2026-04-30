@@ -92,6 +92,11 @@
         <img src="{{ session.get('avatar_url', '') }}" alt="Avatar" class="user-avatar" onerror="this.style.display='none';">
         <span class="user-name">{{ user_name | default('Analyst') }}</span>
       </div>
+
+      <button class="btn-presentation" id="btn-presentation" title="Toggle Presentation Mode" aria-label="Toggle Presentation Mode">
+        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+        <span>Presentation Mode</span>
+      </button>
       
       <a href="/logout" class="btn-logout" title="End Session" aria-label="Logout">
         <i class="fa-solid fa-power-off"></i>
@@ -105,6 +110,17 @@
       </button>
     </div>
   </header>
+
+  <div class="presentation-banner hidden" id="presentation-banner" role="status" aria-live="polite">
+    <div class="presentation-banner-content">
+      <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+      <span><strong>PRESENTATION MODE ACTIVE</strong> — Watermark set at <code id="watermark-ts-display">—</code></span>
+    </div>
+    <button class="btn-restore-history" id="btn-restore-history" title="Restore Full History">
+      <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+      <span>Restore Full History</span>
+    </button>
+  </div>
 
   <div class="no-data-banner hidden" id="no-data-banner" role="alert">
     <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
