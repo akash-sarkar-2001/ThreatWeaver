@@ -40,6 +40,8 @@ Chart.defaults.plugins.tooltip.cornerRadius    = 8;
 const charts      = {};
 let incidentsData = [];
 let sortState     = { col: 'threat_score', dir: 'desc' };
+let presentationModeActive = false;
+let autoRefreshTimer = null;
 
 // ================================================================
 // DOM helpers
@@ -688,6 +690,97 @@ function initPrintReport() {
 }
 
 // ================================================================
+// Presentation Mode
+// ================================================================
+function initPresentationMode() {
+  const btn = $('btn-presentation');
+  const banner = $('presentation-banner');
+  const tsDisplay = $('watermark-ts-display');
+  const restoreBtn = $('btn-restore-history');
+  if (!btn) return;
+
+  // --- Sync UI state with server on page load ---
+  fetchJSON('/api/watermark-status')
+    .then(data => {
+      if (data.active) {
+        presentationModeActive = true;
+        btn.classList.add('active');
+        btn.querySelector('span').textContent = 'LIVE';
+        if (banner) banner.classList.remove('hidden');
+        if (tsDisplay && data.watermark_ts) {
+          tsDisplay.textContent = new Date(data.watermark_ts).toLocaleString();
+        }
+        // Switch to fast 10s polling
+        switchPollingInterval(10_000);
+      }
+    })
+    .catch(() => {}); // Silently ignore if the endpoint isn't ready yet
+
+  // --- Toggle button click ---
+  btn.addEventListener('click', async () => {
+    if (presentationModeActive) {
+      // Currently active → confirm deactivation
+      if (!confirm('Deactivate Presentation Mode?\n\nThis will restore the full historical view of all logs.')) return;
+
+      try {
+        await fetch('/api/clear-watermark', { method: 'POST' });
+        presentationModeActive = false;
+        btn.classList.remove('active');
+        btn.querySelector('span').textContent = 'Presentation Mode';
+        if (banner) banner.classList.add('hidden');
+        switchPollingInterval(CONFIG.REFRESH_INTERVAL_MS);
+        loadAll(); // Immediate refresh with full data
+      } catch (err) {
+        console.error('[ThreatWeaver] Failed to clear watermark:', err);
+      }
+    } else {
+      // Currently inactive → confirm activation
+      if (!confirm('Activate Presentation Mode?\n\nThe dashboard will be cleared and show only new incoming data. Historical logs are preserved but hidden.')) return;
+
+      try {
+        const res = await fetch('/api/set-watermark', { method: 'POST' });
+        const data = await res.json();
+        presentationModeActive = true;
+        btn.classList.add('active');
+        btn.querySelector('span').textContent = 'LIVE';
+        if (banner) banner.classList.remove('hidden');
+        if (tsDisplay && data.watermark_ts) {
+          tsDisplay.textContent = new Date(data.watermark_ts).toLocaleString();
+        }
+        switchPollingInterval(10_000);
+        loadAll(); // Immediate refresh — should show clean state
+      } catch (err) {
+        console.error('[ThreatWeaver] Failed to set watermark:', err);
+      }
+    }
+  });
+
+  // --- Restore Full History button (in banner) ---
+  if (restoreBtn) {
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm('Restore full history?\n\nPresentation Mode will be deactivated.')) return;
+      try {
+        await fetch('/api/clear-watermark', { method: 'POST' });
+        presentationModeActive = false;
+        btn.classList.remove('active');
+        btn.querySelector('span').textContent = 'Presentation Mode';
+        if (banner) banner.classList.add('hidden');
+        switchPollingInterval(CONFIG.REFRESH_INTERVAL_MS);
+        loadAll();
+      } catch (err) {
+        console.error('[ThreatWeaver] Failed to restore history:', err);
+      }
+    });
+  }
+}
+
+function switchPollingInterval(ms) {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(loadAll, ms);
+  console.log(`[ThreatWeaver] Auto-refresh set to ${ms / 1000}s`);
+}
+
+// ================================================================
 // Main data loader
 // ================================================================
 async function loadAll() {
@@ -726,10 +819,11 @@ document.addEventListener('DOMContentLoaded', () => {
   initExport();
   initSentinel();
   initPrintReport();
+  initPresentationMode();
   
   // Initial load
   loadAll();
 
-  // Auto-refresh using Live DB
-  setInterval(loadAll, CONFIG.REFRESH_INTERVAL_MS);
+  // Auto-refresh using Live DB (default 30s, switches to 10s in presentation mode)
+  autoRefreshTimer = setInterval(loadAll, CONFIG.REFRESH_INTERVAL_MS);
 });
