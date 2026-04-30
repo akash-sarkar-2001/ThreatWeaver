@@ -11,3 +11,9 @@ Authlib>=1.0.0
 pywin32>=300; sys_platform == 'win32'
 urllib3>=1.26.0
 flask-limiter>=4.1.1
+langchain-huggingface>=0.1.0
+langchain-chroma>=0.2.0
+langchain-community>=0.3.0
+langchain-text-splitters>=0.3.0
+chromadb>=0.5.0
+sentence-transformers>=2.2.0
