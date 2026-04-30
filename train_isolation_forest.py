@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import IsolationForest
 import urllib.parse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import os
 import dotenv
 
@@ -63,15 +63,41 @@ def _rolling_10min(g):
         result[g[valid]["_orig_idx"].values] = rolled.values
     return result
 
+def _get_presentation_watermark():
+    """Check if Presentation Mode is active and return the watermark timestamp."""
+    try:
+        with engine.connect() as conn:
+            # Check if the table exists first
+            result = conn.execute(text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'presentation_watermark')"
+            ))
+            if not result.fetchone()[0]:
+                return None
+            result = conn.execute(text("SELECT watermark_ts FROM presentation_watermark WHERE id = 1"))
+            row = result.fetchone()
+            if row:
+                return str(row[0])
+    except Exception:
+        pass
+    return None
+
 def main():
     # =====================================================
     # STEP 1 — LOAD DATA FROM DATABASE
     # =====================================================
     print("[*] STEP 1 — Loading and validating data from Database (in batches)...")
 
+    # Check for Presentation Mode watermark
+    watermark = _get_presentation_watermark()
+
     try:
-        # Fetch only the most recent 100,000 events to ensure stable memory usage on the 4GB VM
-        query = "SELECT * FROM raw_logs ORDER BY timestamp DESC LIMIT 100000;"
+        if watermark:
+            # PRESENTATION MODE: Only scan logs that arrived AFTER the watermark
+            query = f"SELECT * FROM raw_logs WHERE timestamp > '{watermark}' ORDER BY timestamp DESC LIMIT 100000;"
+            print(f"[PRES] ⚡ Presentation Mode ACTIVE — scanning only post-watermark logs (after {watermark})")
+        else:
+            # Normal mode: Fetch the most recent 100,000 events
+            query = "SELECT * FROM raw_logs ORDER BY timestamp DESC LIMIT 100000;"
         
         # Read the data in chunks of 10,000 rows to prevent memory overload
         chunk_iterator = pd.read_sql(query, engine, chunksize=10000)
