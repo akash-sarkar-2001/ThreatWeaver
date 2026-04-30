@@ -3,10 +3,11 @@ import sys
 import urllib.parse
 from collections import defaultdict
 import time
+from datetime import datetime
 import pandas as pd
 from flask import Flask, jsonify, render_template, redirect, url_for, session, abort, request
 from authlib.integrations.flask_client import OAuth
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import dotenv
 
 dotenv.load_dotenv()
@@ -66,8 +67,50 @@ _DB_CACHE_TIME = 0
 _RAW_COUNT_CACHE = 0
 _RAW_COUNT_TIME = 0
 
+# =====================================================
+# PRESENTATION MODE — WATERMARK SYSTEM
+# =====================================================
+def _ensure_watermark_table():
+    """Create the presentation_watermark table if it doesn't exist."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS presentation_watermark (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    watermark_ts TIMESTAMP NOT NULL,
+                    CHECK (id = 1)
+                )
+            """))
+            conn.commit()
+    except Exception as e:
+        print(f"[PRES] Watermark table creation error: {e}")
+
+# Auto-create the table on startup
+_ensure_watermark_table()
+
+def _get_watermark():
+    """Return the watermark timestamp as a string, or None if not set."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT watermark_ts FROM presentation_watermark WHERE id = 1"))
+            row = result.fetchone()
+            if row:
+                return str(row[0])
+    except Exception as e:
+        print(f"[PRES] Watermark read error: {e}")
+    return None
+
+def _invalidate_caches():
+    """Force all in-memory caches to expire."""
+    global _DB_CACHE, _DB_CACHE_TIME, _RAW_COUNT_CACHE, _RAW_COUNT_TIME
+    _DB_CACHE = None
+    _DB_CACHE_TIME = 0
+    _RAW_COUNT_CACHE = 0
+    _RAW_COUNT_TIME = 0
+
 def _load_analysis():
-    """Return the main analysis DataFrame from PostgreSQL with memory caching."""
+    """Return the main analysis DataFrame from PostgreSQL with memory caching.
+    When a presentation watermark is active, only returns post-watermark data."""
     global _DB_CACHE, _DB_CACHE_TIME
     current_time = time.time()
 
@@ -75,7 +118,12 @@ def _load_analysis():
         return _DB_CACHE
 
     try:
-        query = "SELECT * FROM analyzed_logs"
+        watermark = _get_watermark()
+        if watermark:
+            query = f"SELECT * FROM analyzed_logs WHERE timestamp > '{watermark}'"
+        else:
+            query = "SELECT * FROM analyzed_logs"
+
         df = pd.read_sql(query, engine)
         if df.empty:
             return None
@@ -88,7 +136,8 @@ def _load_analysis():
         return None
 
 def _get_raw_total_events():
-    """Fast, cached query to get the TRUE total number of logs in the database."""
+    """Fast, cached query to get the total number of logs.
+    When a presentation watermark is active, counts only post-watermark logs."""
     global _RAW_COUNT_CACHE, _RAW_COUNT_TIME
     current_time = time.time()
 
@@ -96,8 +145,12 @@ def _get_raw_total_events():
         return _RAW_COUNT_CACHE
 
     try:
-        # Ask Postgres to just count the rows (very fast) instead of downloading them
-        count_df = pd.read_sql("SELECT COUNT(*) FROM raw_logs", engine)
+        watermark = _get_watermark()
+        if watermark:
+            count_df = pd.read_sql(f"SELECT COUNT(*) FROM raw_logs WHERE timestamp > '{watermark}'", engine)
+        else:
+            count_df = pd.read_sql("SELECT COUNT(*) FROM raw_logs", engine)
+
         total = int(count_df.iloc[0, 0])
         
         _RAW_COUNT_CACHE = total
@@ -124,6 +177,10 @@ def check_authentication():
     # Don't block the background Windows agents uploading logs!
     if request.path.startswith('/api/upload-logs'):
         return
+
+    # Don't block the watermark status check (used by JS on page load)
+    if request.path == '/api/watermark-status' and request.method == 'GET':
+        pass  # Still requires session check below
         
     if request.endpoint not in open_routes and 'user_email' not in session:
         return redirect(url_for('login'))
@@ -401,6 +458,58 @@ def api_sentinel_report():
         print("[-] API 500 Error in Sentinel Report:")
         traceback.print_exc()
         return jsonify({"error": "Internal Server Error. Check the terminal for details."}), 500
+
+# =====================================================
+# PRESENTATION MODE API ENDPOINTS
+# =====================================================
+@app.route("/api/set-watermark", methods=["POST"])
+def api_set_watermark():
+    """Activate Presentation Mode by stamping the current time as the watermark."""
+    try:
+        with engine.connect() as conn:
+            # Upsert: insert or update the single watermark row
+            conn.execute(text("""
+                INSERT INTO presentation_watermark (id, watermark_ts)
+                VALUES (1, NOW())
+                ON CONFLICT (id) DO UPDATE SET watermark_ts = NOW()
+            """))
+            conn.commit()
+            # Read back the actual timestamp that was set
+            result = conn.execute(text("SELECT watermark_ts FROM presentation_watermark WHERE id = 1"))
+            row = result.fetchone()
+            ts_str = str(row[0]) if row else "unknown"
+
+        # Invalidate all cached data so the dashboard immediately reflects the clean state
+        _invalidate_caches()
+        print(f"[PRES] ✅ Presentation Mode ACTIVATED — watermark set to {ts_str}")
+        return jsonify({"status": "ok", "watermark_ts": ts_str})
+    except Exception as e:
+        print(f"[PRES] Error setting watermark: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/clear-watermark", methods=["POST"])
+def api_clear_watermark():
+    """Deactivate Presentation Mode — restore full history view."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM presentation_watermark WHERE id = 1"))
+            conn.commit()
+
+        _invalidate_caches()
+        print("[PRES] ❌ Presentation Mode DEACTIVATED — full history restored")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"[PRES] Error clearing watermark: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/watermark-status")
+def api_watermark_status():
+    """Return whether Presentation Mode is active and the watermark timestamp."""
+    watermark = _get_watermark()
+    return jsonify({
+        "active": watermark is not None,
+        "watermark_ts": watermark
+    })
 
 if __name__ == "__main__":
     cert_path = "cert.pem"
