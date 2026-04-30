@@ -4,12 +4,12 @@
 
 **AI-Powered SOC Platform for Active Directory Threat Detection**
 
-Isolation Forest ML · Rule-Based Detection · MITRE ATT&CK Mapping · LLM Threat Intelligence
+Isolation Forest ML · Rule-Based Detection · MITRE ATT&CK Mapping · RAG-Augmented LLM Threat Intelligence
 
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-Web_Dashboard-000000?logo=flask)](https://flask.palletsprojects.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/License-Research_Use-orange)](#disclaimer)
+[![License](https://img.shields.io/badge/License-Apache_2.0-orange)](#license)
 
 </div>
 
@@ -17,26 +17,27 @@ Isolation Forest ML · Rule-Based Detection · MITRE ATT&CK Mapping · LLM Threa
 
 ## 🔍 What is ThreatWeaver?
 
-ThreatWeaver is an end-to-end threat detection platform built for Windows Active Directory environments. It collects security event logs from Domain Controllers and client machines, runs them through a multi-layered detection engine combining **unsupervised machine learning** and **deterministic rule-based heuristics**, and presents the results on a real-time SOC dashboard — complete with optional **AI-generated threat intelligence reports** powered by a local LLM.
+ThreatWeaver is an end-to-end threat detection platform built for Windows Active Directory environments. It collects security event logs from Domain Controllers and client machines, runs them through a multi-layered detection engine combining **unsupervised machine learning** and **deterministic rule-based heuristics**, and presents the results on a real-time SOC dashboard — complete with **AI-generated threat intelligence reports** powered by a local LLM augmented with a **Retrieval-Augmented Generation (RAG) pipeline** that grounds recommendations in your own SOC runbooks.
 
 ---
 
 ## ⚙️ Architecture Overview
 
 ```
-┌─────────────────────┐     ┌──────────────────────┐
-│  Domain Controller  │     │    Client Machine    │
-│   (server-log.py)   │     │   (client-log.py)    │
-│                     │     │                      │
-│  Reads Event IDs:   │     │  Reads Event IDs:    │
-│  4624, 4625, 4672,  │     │  4624, 4625, 4688    │
-│  4768, 4769, 4688   │     │                      │
-└────────┬────────────┘     └───────────┬──────────┘
+┌─────────────────────┐     ┌───────────────────────┐
+│  Domain Controller  │     │    Client Machine     │
+│   (server-log.py)   │     │   (client-log.py)     │
+│                     │     │                       │
+│  Reads Event IDs:   │     │  Reads Event IDs:     │
+│  4624, 4625, 4672,  │     │  4624, 4625, 4688     │
+│  4768, 4769, 4688   │     │  Chunked HTTPS Upload │
+└────────┬────────────┘     └───────────┬───────────┘
          │  Direct DB Insert            │  HTTPS + API Key
          │                              ▼
          │                    ┌────────────────────────────┐
          │                    │  secure_log_server.py      │
          │                    │  (Flask REST API on :5000) │
+         │                    │  Rate-Limited + 2MB Cap    │
          │                    └────────────┬───────────────┘
          │                                 │
          ▼                                 ▼
@@ -67,8 +68,37 @@ ThreatWeaver is an end-to-end threat detection platform built for Windows Active
      │ (SOC Dashboard │  │  (SENTINEL AI     │
      │  on :5001)     │  │  Threat Reports)  │
      │ GitHub OAuth   │  │  Ollama + Qwen2.5 │
-     └────────────────┘  └───────────────────┘
+     └────────────────┘  │                   │
+                         │  ┌──────────────┐ │
+                         │  │ RAG Pipeline │ │
+                         │  │ ChromaDB +   │ │
+                         │  │ HuggingFace  │ │
+                         │  │ Embeddings   │ │
+                         │  └──────────────┘ │
+                         └───────────────────┘
+
+┌──────────────────────────────────────────────┐
+│  ingest_intel.py                             │
+│  Ingests SOC runbooks (runbooks/*.md) into   │
+│  ChromaDB vector store for RAG retrieval     │
+└──────────────────────────────────────────────┘
 ```
+
+---
+
+## 🧠 RAG-Augmented Threat Intelligence
+
+ThreatWeaver implements a **Retrieval-Augmented Generation (RAG)** pipeline to ground the AI-generated threat reports in your organization's own internal runbooks and threat intelligence documentation.
+
+### How It Works
+
+1. **Ingest** — `ingest_intel.py` loads Markdown documents from the `runbooks/` directory, splits them into 500-character chunks with overlap, generates embeddings using the `all-MiniLM-L6-v2` sentence transformer model, and stores them in a local **ChromaDB** vector database.
+
+2. **Retrieve** — When `testollama.py` generates a SENTINEL AI report, it uses the detected MITRE ATT&CK techniques as a search query against the vector store, retrieving the top 3 most relevant runbook chunks.
+
+3. **Augment** — The retrieved context is injected into the LLM prompt under an `INTERNAL RUNBOOK CONTEXT` section. The LLM is explicitly instructed to base its `PRIORITY RESPONSE ACTIONS` and `ZERO TRUST HARDENING RECOMMENDATIONS` on the provided runbook content.
+
+This ensures that generated recommendations are **specific to your environment** rather than generic security advice.
 
 ---
 
@@ -107,14 +137,17 @@ Each event receives a weighted **rule score** + an **ML score** (if flagged as a
 
 | File | Purpose |
 |---|---|
-| `train_isolation_forest.py` | Core detection engine — loads raw logs, runs Isolation Forest + 9 rules, maps MITRE ATT&CK techniques, scores risks, writes results to `analyzed_logs` table. Runs on a 60-second loop. |
-| `dashboard.py` | Flask web dashboard (port 5001) — serves REST APIs for summary stats, risk distributions, top incidents, MITRE technique breakdowns, timeline data, user/IP analysis, and SENTINEL AI reports. Protected by GitHub OAuth. |
-| `testollama.py` | SENTINEL AI threat intelligence engine — aggregates metrics from both DB tables, builds a structured prompt, queries Ollama LLM, validates output against allowed MITRE techniques, and sanitizes the final report. Includes prompt injection defenses. |
+| `train_isolation_forest.py` | Core detection engine — loads raw logs (up to 100K events in memory-safe batches), runs Isolation Forest + 9 rules, maps MITRE ATT&CK techniques, scores risks, writes results to `analyzed_logs` table. Runs on a 60-second loop. |
+| `dashboard.py` | Flask web dashboard (port 5001) — serves REST APIs for summary stats, risk distributions, top incidents, MITRE technique breakdowns, timeline data, user/IP analysis, and SENTINEL AI reports. Protected by GitHub OAuth. Includes in-memory caching with configurable TTL. |
+| `testollama.py` | SENTINEL AI threat intelligence engine — aggregates metrics from both DB tables, retrieves relevant context from the ChromaDB vector store via RAG, builds a structured prompt, queries Ollama LLM, validates output against allowed MITRE techniques, and sanitizes the final report. Includes prompt injection defenses and an in-memory cache. |
+| `ingest_intel.py` | RAG ingestion script — loads SOC runbooks and threat intel documents from `runbooks/`, splits them into chunks, embeds them with `all-MiniLM-L6-v2`, and stores the vectors in a local ChromaDB database (`chroma_db/`). |
 | `server-log.py` | Domain Controller log collector — reads Windows Security Event Log (Event IDs 4624/4625/4672/4768/4769/4688), inserts directly into PostgreSQL. Uses a watermark file for incremental collection. |
-| `client-log.py` | Client machine log collector — reads local Windows Security events (4624/4625/4688), forwards them over HTTPS to `secure_log_server.py` with API key authentication. |
-| `secure_log_server.py` | Flask REST API (port 5000) — receives JSON log payloads from client agents over TLS, authenticates via `X-API-KEY` header, and inserts into PostgreSQL. |
+| `client-log.py` | Client machine log collector — reads local Windows Security events (4624/4625/4688), forwards them over HTTPS to `secure_log_server.py` with API key authentication. Sends logs in chunks of 2,000 to stay within the server's 2MB payload limit. Uses a persistent watermark file for incremental collection across restarts. |
+| `secure_log_server.py` | Flask REST API (port 5000) — receives JSON log payloads from client agents over TLS, authenticates via `X-API-KEY` header, and inserts into PostgreSQL. Includes rate limiting (20 requests/min, 200/hr, 1000/day) and a 2MB max payload cap. |
 | `generate_cert.py` | Generates self-signed SSL certificates (RSA 4096-bit, SHA-256) with SAN for server IP, 127.0.0.1, and localhost. |
 | `attack.sh` | Bash attack simulator (designed for Termux) — cycles through 10 AD attack patterns (brute force, password spray, credential stuffing, lateral movement, Kerberoasting prep, etc.) against a target DC using `smbclient`. |
+| `runbooks/` | Directory containing SOC runbook Markdown files that are ingested into the RAG vector store by `ingest_intel.py`. Add your own `.md` playbooks here to customize SENTINEL AI recommendations. |
+| `chroma_db/` | Local ChromaDB vector database (auto-generated by `ingest_intel.py`). Stores embedded runbook chunks for RAG retrieval. |
 | `templates/dashboard.html` | Main SOC dashboard UI template with charts and incident tables. |
 | `templates/login.html` | GitHub OAuth login page. |
 
@@ -178,7 +211,17 @@ python generate_cert.py
 
 Ensure your PostgreSQL instance has TimescaleDB enabled. The `raw_logs` hypertable is created automatically when `server-log.py` runs for the first time.
 
-### 5. Start Log Collection
+### 5. Ingest SOC Runbooks (RAG Setup)
+
+Place your SOC runbook Markdown files in the `runbooks/` directory, then run:
+
+```bash
+python ingest_intel.py
+```
+
+This embeds the runbooks into the local ChromaDB vector store. The SENTINEL AI engine will use these as grounding context when generating threat reports. Re-run this command whenever you add or update runbooks.
+
+### 6. Start Log Collection
 
 **On the Domain Controller:**
 ```bash
@@ -194,21 +237,21 @@ Then on the client:
 python client-log.py
 ```
 
-### 6. Run the Detection Engine
+### 7. Run the Detection Engine
 
 ```bash
 python train_isolation_forest.py
 ```
 This continuously analyzes new raw logs every 60 seconds and writes scored results to the `analyzed_logs` table.
 
-### 7. Launch the SOC Dashboard
+### 8. Launch the SOC Dashboard
 
 ```bash
 python dashboard.py
 ```
-Open `https://localhost:5001` — you'll be prompted to authenticate via GitHub OAuth. Only whitelisted admin emails (configured in `dashboard.py`) can access the dashboard.
+Open `https://localhost:5001` — you'll be prompted to authenticate via GitHub OAuth. Only whitelisted admin emails (configured in `.env`) can access the dashboard.
 
-### 8. Generate AI Threat Reports (Optional)
+### 9. Generate AI Threat Reports (Optional)
 
 With Ollama running locally:
 ```bash
@@ -236,8 +279,10 @@ This runs 10 attack patterns in 30-second cycles: brute force, password spraying
 - **GitHub OAuth** — Zero-trust access control for the SOC dashboard with email-based admin whitelist
 - **API Key Authentication** — Header-based auth (`X-API-KEY`) for the log ingestion endpoint
 - **TLS Encryption** — Self-signed certificates for both the log server and dashboard
+- **Rate Limiting** — Flask-Limiter on the log ingestion endpoint (20/min, 200/hr, 1000/day) with 2MB payload cap
 - **Prompt Injection Protection** — Input sanitization, output validation, and hard enforcement sanitization for LLM-generated reports
-- **Incremental Log Collection** — Watermark-based tracking prevents duplicate log ingestion
+- **Incremental Log Collection** — Persistent watermark file tracking prevents duplicate log ingestion across restarts
+- **RAG Grounding** — LLM recommendations are anchored to your own SOC runbooks via retrieval-augmented generation, reducing hallucination
 
 ---
 
@@ -249,7 +294,7 @@ This project is built for **lab, research, and educational environments**. Befor
 - Replace self-signed certificates with CA-signed ones
 - Secure the `.env` file and restrict filesystem permissions
 - Test ML model performance on larger datasets
-- Update the `AUTHORIZED_ADMINS` list in `dashboard.py` with your own email
+- Update the `AUTHORIZED_ADMINS` in `.env` with your own email
 
 ## ⚖️ License
 
