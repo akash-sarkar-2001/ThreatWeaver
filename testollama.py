@@ -18,6 +18,8 @@ import pandas as pd
 import requests
 from sqlalchemy import create_engine
 import dotenv
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 
 dotenv.load_dotenv()
 
@@ -43,6 +45,26 @@ MAX_LLM_ATTEMPTS = 2  # still try once to correct, but we will sanitize regardle
 # -------------------------------------------------
 # HELPERS
 # -------------------------------------------------
+
+# Add these imports to testollama.py
+
+# Initialize the retriever globally
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
+retriever = vector_db.as_retriever(search_kwargs={"k": 3}) # Retrieve top 3 relevant chunks
+
+def get_threat_context(allowed_mitre_techniques):
+    """Fetches relevant runbook context based on the detected techniques."""
+    if not allowed_mitre_techniques:
+        return "No specific internal runbook context found."
+    
+    # Create a search query based on the detected techniques
+    query = "Mitigation and response for: " + ", ".join(allowed_mitre_techniques)
+    relevant_docs = retriever.invoke(query)
+    
+    # Combine the retrieved text
+    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+    return context
 
 def sanitize_for_prompt(text: Any) -> str:
     """Sanitize arbitrary input to prevent LLM prompt injection."""
@@ -502,7 +524,6 @@ def _fmt_log_metrics(label: str, m: dict) -> str:
         f"    Top Processes: {top_pr}"
     )
 
-
 def build_prompt(summary: Dict[str, Any]) -> str:
     verdict        = summary["machine_verdict"].replace("_", " ")
     confidence     = summary["confidence_score"]
@@ -514,6 +535,8 @@ def build_prompt(summary: Dict[str, Any]) -> str:
     unique_users   = summary.get("unique_high_users", 0)
     unique_ips     = summary.get("unique_high_ips", 0)
     allowed_mitre  = summary.get("allowed_mitre_techniques", []) or []
+    # Fetch RAG context
+    rag_context = get_threat_context(allowed_mitre)
     top_incidents  = summary.get("top_incidents", []) or []
     dc_m           = summary.get("dc_log_metrics", {}) or {}
     cl_m           = summary.get("client_log_metrics", {}) or {}
@@ -572,13 +595,15 @@ Confidence : {confidence}%
 Log telemetry:
 {dc_str}
 {cl_str}
-Process matches near anomalies: {proc_matches} (window={proc_window}m), top: {top_proc_str}
 
 Top incidents:
 {incidents_str}
 
-Allowed MITRE techniques (ONLY these, numbered for reference):
+Allowed MITRE techniques:
 {allowed_str}
+
+--- INTERNAL RUNBOOK CONTEXT ---
+{rag_context}
 --- END EVIDENCE ---
 
 RULES (strictly enforced):
@@ -589,6 +614,7 @@ RULES (strictly enforced):
 {stuffing_constraint}
 4. Do NOT invent any username, IP, or threat actor not present in the incident data above.
 5. Do NOT write anything after the ZERO TRUST HARDENING RECOMMENDATIONS section.
+6. Base your "ZERO TRUST HARDENING RECOMMENDATIONS" and "PRIORITY RESPONSE ACTIONS" strictly on the provided INTERNAL RUNBOOK CONTEXT where applicable.
 
 Write the following six sections in order. Each section MUST have the exact heading shown:
 
