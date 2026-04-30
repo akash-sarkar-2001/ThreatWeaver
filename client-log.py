@@ -140,11 +140,19 @@ def fetch_and_send_logs():
         print(f"[*] Preparing to send {len(events)} NEW events...")
         try:
             headers = {"X-API-KEY": API_KEY, "Content-Type": "application/json"}
-            response = requests.post(SERVER_URL, json=events, headers=headers, verify=False)
-            if response.status_code == 200:
-                print(f"[+] Successfully sent {len(events)} events to server.")
-            else:
-                print(f"[-] Server rejected payload: {response.text}")
+            
+            # Send logs in chunks of 2,000 to avoid hitting the 2MB server limit
+            chunk_size = 2000
+            for i in range(0, len(events), chunk_size):
+                chunk = events[i:i + chunk_size]
+                
+                response = requests.post(SERVER_URL, json=chunk, headers=headers, verify=False, timeout=10)
+                
+                if response.status_code == 200:
+                    print(f"[+] Successfully sent chunk of {len(chunk)} events to server.")
+                else:
+                    print(f"[-] Server rejected payload chunk: {response.text}")
+                    
         except requests.exceptions.SSLError:
             print("[-] TLS verification failed. Check your certificate.")
         except Exception as e:
