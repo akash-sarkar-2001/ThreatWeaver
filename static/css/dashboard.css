@@ -169,6 +169,113 @@ body {
 .no-data-banner code { background: rgba(0,212,255,0.12); color: var(--text-code); font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; padding: 2px 8px; border-radius: 4px; }
 
 /* ================================================================
+   PRESENTATION MODE — Button & Banner
+   ================================================================ */
+.btn-presentation {
+  padding: 8px 18px;
+  background: rgba(0, 255, 136, 0.08);
+  color: var(--green);
+  border: 1px solid rgba(0, 255, 136, 0.28);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: inherit;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  transition: all var(--t-fast);
+  white-space: nowrap;
+}
+.btn-presentation:hover {
+  background: rgba(0, 255, 136, 0.18);
+  border-color: rgba(0, 255, 136, 0.5);
+  transform: translateY(-1px);
+  box-shadow: var(--glow-green);
+}
+.btn-presentation:active { transform: translateY(0); }
+
+/* Active state — amber glow when Presentation Mode is ON */
+.btn-presentation.active {
+  background: rgba(255, 140, 0, 0.15);
+  color: var(--orange);
+  border-color: rgba(255, 140, 0, 0.5);
+  box-shadow: 0 0 14px rgba(255, 140, 0, 0.25);
+  animation: pulse-pres-btn 2.5s ease-in-out infinite;
+}
+.btn-presentation.active:hover {
+  background: rgba(255, 140, 0, 0.25);
+  box-shadow: 0 0 22px rgba(255, 140, 0, 0.4);
+}
+
+@keyframes pulse-pres-btn {
+  0%, 100% { box-shadow: 0 0 14px rgba(255, 140, 0, 0.25); }
+  50% { box-shadow: 0 0 22px rgba(255, 140, 0, 0.5); }
+}
+
+/* Presentation Banner (below header) */
+.presentation-banner {
+  background: rgba(255, 140, 0, 0.06);
+  border: 1px solid rgba(255, 140, 0, 0.25);
+  border-radius: var(--radius);
+  padding: 12px 22px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.presentation-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--orange);
+  font-size: 0.85rem;
+}
+.presentation-banner-content i {
+  font-size: 1rem;
+  color: var(--orange);
+}
+.presentation-banner-content strong {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.presentation-banner-content code {
+  background: rgba(255, 140, 0, 0.12);
+  color: var(--orange);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.btn-restore-history {
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-family: inherit;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--t-fast);
+  white-space: nowrap;
+}
+.btn-restore-history:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+/* ================================================================
    KPI CARDS, CHARTS, TIMELINE & TABLES
    ================================================================ */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; margin-bottom: 32px; }
@@ -308,7 +415,7 @@ body {
    PRINT
    ================================================================ */
 @media print {
-  #bg-canvas, .sidebar, .dash-header, #no-data-banner, #section-kpi, #section-charts, #section-timeline, #section-incidents, .sentinel-header, .sentinel-ai-badge, .sentinel-status, .sentinel-toolbar, .tooltip-layer { display: none !important; }
+  #bg-canvas, .sidebar, .dash-header, #no-data-banner, .presentation-banner, #section-kpi, #section-charts, #section-timeline, #section-incidents, .sentinel-header, .sentinel-ai-badge, .sentinel-status, .sentinel-toolbar, .tooltip-layer { display: none !important; }
   body { background: #fff !important; color: #111 !important; font-family: 'Inter', Georgia, serif; font-size: 11pt; line-height: 1.65; margin: 0; display: block; }
   .main-content { margin-left: 0 !important; padding: 0 !important; }
   #section-sentinel { margin: 0 !important; } #section-sentinel .section-title { display: none; }
