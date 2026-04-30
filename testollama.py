@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import time
 import pandas as pd
 import requests
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -406,14 +406,36 @@ def load_and_analyze() -> Dict[str, Any]:
 
     print("[*] Fetching analyzed_logs from database...")
     try:
-        df = pd.read_sql("SELECT * FROM analyzed_logs", engine)
+        # Check for Presentation Mode watermark
+        watermark_ts = None
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'presentation_watermark')"
+                ))
+                if result.fetchone()[0]:
+                    result = conn.execute(text("SELECT watermark_ts FROM presentation_watermark WHERE id = 1"))
+                    row = result.fetchone()
+                    if row:
+                        watermark_ts = str(row[0])
+        except Exception:
+            pass
+
+        if watermark_ts:
+            print(f"[PRES] ⚡ Presentation Mode ACTIVE — filtering to post-watermark data")
+            df = pd.read_sql(f"SELECT * FROM analyzed_logs WHERE timestamp > '{watermark_ts}'", engine)
+        else:
+            df = pd.read_sql("SELECT * FROM analyzed_logs", engine)
     except Exception as e:
         print(f"[-] Database Error (analyzed_logs): {e}")
         raise SystemExit("Ensure train_isolation_forest.py has run successfully.")
 
     print("[*] Fetching raw_logs from database...")
     try:
-        raw_df = pd.read_sql("SELECT * FROM raw_logs", engine)
+        if watermark_ts:
+            raw_df = pd.read_sql(f"SELECT * FROM raw_logs WHERE timestamp > '{watermark_ts}'", engine)
+        else:
+            raw_df = pd.read_sql("SELECT * FROM raw_logs", engine)
         dc_df = raw_df[raw_df["source_machine"] == "DOMAIN_CONTROLLER"]
         client_df = raw_df[raw_df["source_machine"] == "CLIENT_MACHINE"]
     except Exception as e:
