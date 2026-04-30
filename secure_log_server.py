@@ -56,6 +56,8 @@ def upload_logs():
     ]
 
     # 4. Insert into PostgreSQL
+    conn = None
+    cursor = None
     try:
         conn = psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS, port=DB_PORT)
         cursor = conn.cursor()
@@ -68,15 +70,19 @@ def upload_logs():
         extras.execute_values(cursor, insert_query, values_to_insert)
         conn.commit()
         
-        cursor.close()
-        conn.close()
-        
         print(f"[+] Received and stored {len(logs)} client logs over secure tunnel.")
         return jsonify({"message": "Logs successfully ingested"}), 200
 
     except Exception as e:
         print(f"[-] Database Error: {e}")
         return jsonify({"error": str(e)}), 500
+        
+    finally:
+        # This guarantees the connection is closed even if an error crashes the try block
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 if __name__ == '__main__':
     cert_path = os.getenv("CERT_PATH", "cert.pem")
